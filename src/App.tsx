@@ -20,7 +20,6 @@ const DEFAULT_MINES_COUNT = 5
 const MINES_EDGE = 0.99
 const HILO_HOUSE_EDGE = 0.99
 const DEV_MODE_TRIGGER_KEY = '-'
-const DEV_MODE_PASSWORD = 'houseedge'
 const DEV_MODE_SESSION_KEY = 'dalton-casino-dev-mode'
 const PLAYER_ID_STORAGE_KEY = 'dalton-casino-player-id'
 const PLAYER_PROFILE_STORAGE_PREFIX = 'dalton-casino-player-profile:'
@@ -951,6 +950,22 @@ const formatSignedPoints = (value: number) => {
   }
 
   return `${value > 0 ? '+' : '-'}${Math.abs(Math.round(value)).toLocaleString()} pts`
+}
+
+const verifyDevAccessCode = async (code: string) => {
+  const response = await fetch('/api/verify-dev-code', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ code }),
+  })
+
+  const payload = (await response.json().catch(() => null)) as { success?: boolean; error?: string } | null
+
+  if (!response.ok || !payload?.success) {
+    throw new Error(payload?.error || 'Unable to verify code')
+  }
 }
 
 const getScoreChangeLabel = (value: number) =>
@@ -2142,12 +2157,8 @@ function App() {
   const [playerProfile, setPlayerProfile] = useState<LocalPlayerProfile>(() =>
     getOrCreateLocalPlayerProfile(),
   )
-  const [introNameInput, setIntroNameInput] = useState(() => getOrCreateLocalPlayerProfile().name || '')
-  const [introNameError, setIntroNameError] = useState('')
   const [bet, setBet] = useState(MIN_BET)
   const [selectedGame, setSelectedGame] = useState<
-    | 'intro'
-    | 'intro-name'
     | 'lobby'
     | 'options'
     | 'blackjack'
@@ -2163,14 +2174,11 @@ function App() {
     | 'slots'
     | 'plinko'
     | 'dice'
-  >(() => (getOrCreateLocalPlayerProfile().skipStartScreen ? 'lobby' : 'intro'))
+  >(() => 'lobby')
   const [bankroll, setBankrollState] = useState(() =>
     normalizeBankroll(getOrCreateLocalPlayerProfile().bankroll),
   )
   const [optionsNameInput, setOptionsNameInput] = useState(() => getOrCreateLocalPlayerProfile().name || '')
-  const [optionsSkipStartScreen, setOptionsSkipStartScreen] = useState(
-    () => getOrCreateLocalPlayerProfile().skipStartScreen,
-  )
   const [optionsTab, setOptionsTab] = useState<'settings' | 'statistics'>('settings')
   const [playerHands, setPlayerHands] = useState<Card[][]>([])
   const [handBets, setHandBets] = useState<number[]>([])
@@ -2291,6 +2299,7 @@ function App() {
   const [devModePromptOpen, setDevModePromptOpen] = useState(false)
   const [devModeInput, setDevModeInput] = useState('')
   const [devModeError, setDevModeError] = useState('')
+  const [devModeVerifying, setDevModeVerifying] = useState(false)
   const [settingsPlayerSearch, setSettingsPlayerSearch] = useState('')
   const [settingsPlayers, setSettingsPlayers] = useState<LocalPlayerProfile[]>(() =>
     listLocalPlayerProfiles(),
@@ -2315,6 +2324,7 @@ function App() {
   const [casinoStatsResetConfirmOpen, setCasinoStatsResetConfirmOpen] = useState(false)
   const [casinoStatsResetInput, setCasinoStatsResetInput] = useState('')
   const [casinoStatsResetError, setCasinoStatsResetError] = useState('')
+  const [casinoStatsResetVerifying, setCasinoStatsResetVerifying] = useState(false)
   const previousPokerFoldStateRef = useRef<Record<string, boolean>>({})
   const pokerFoldAnimationTimeoutsRef = useRef<Record<string, number>>({})
   const previousPokerActionIdRef = useRef<number | null>(null)
@@ -2389,9 +2399,7 @@ function App() {
     if (nextProfile.id === playerProfile.id) {
       setPlayerProfile(nextProfile)
       setBankroll(nextProfile.bankroll)
-      setIntroNameInput(nextProfile.name || '')
       setOptionsNameInput(nextProfile.name || '')
-      setOptionsSkipStartScreen(nextProfile.skipStartScreen)
     }
   }
 
@@ -2678,10 +2686,8 @@ function App() {
   }, [playerProfile.id])
 
   useEffect(() => {
-    setIntroNameInput(playerProfile.name || '')
     setOptionsNameInput(playerProfile.name || '')
-    setOptionsSkipStartScreen(playerProfile.skipStartScreen)
-  }, [playerProfile.name, playerProfile.skipStartScreen])
+  }, [playerProfile.name])
 
   useEffect(() => {
     if (!selectedSettingsPlayer) {
@@ -2803,12 +2809,14 @@ function App() {
           setDevModePromptOpen(false)
           setDevModeInput('')
           setDevModeError('')
+          setDevModeVerifying(false)
           return
         }
 
         setDevModePromptOpen(true)
         setDevModeInput('')
         setDevModeError('')
+        setDevModeVerifying(false)
         return
       }
     }
@@ -2820,41 +2828,27 @@ function App() {
     }
   }, [devMode])
 
-  const handleSubmitDevModeCode = () => {
-    if (devModeInput.toLowerCase() !== DEV_MODE_PASSWORD) {
-      setDevModeError('Incorrect code')
+  const handleSubmitDevModeCode = async () => {
+    if (!devModeInput.trim()) {
+      setDevModeError('Enter a code first')
       return
     }
 
-    setDevMode((currentMode) => !currentMode)
-    setDevModePromptOpen(false)
-    setDevModeInput('')
+    setDevModeVerifying(true)
     setDevModeError('')
-  }
 
-  const handleSubmitIntroName = () => {
-    if (playerProfile.nameLocked) {
-      setIntroNameError('Your player name is locked.')
-      return
+    try {
+      await verifyDevAccessCode(devModeInput.trim())
+      setDevMode((currentMode) => !currentMode)
+      setDevModePromptOpen(false)
+      setDevModeInput('')
+      setDevModeError('')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to verify code'
+      setDevModeError(message)
+    } finally {
+      setDevModeVerifying(false)
     }
-
-    const trimmedName = introNameInput.trim()
-
-    if (!trimmedName) {
-      setIntroNameError('Enter your name first.')
-      return
-    }
-
-    const nextProfile = {
-      ...playerProfile,
-      name: trimmedName,
-      skipStartScreen: optionsSkipStartScreen,
-      updatedAt: new Date().toISOString(),
-    }
-
-    persistLocalPlayerProfile(nextProfile)
-    setIntroNameError('')
-    setSelectedGame('lobby')
   }
 
   const handleSavePlayerOptions = () => {
@@ -2873,23 +2867,11 @@ function App() {
     const nextProfile = {
       ...playerProfile,
       name: trimmedName,
-      skipStartScreen: optionsSkipStartScreen,
       updatedAt: new Date().toISOString(),
     }
 
     persistLocalPlayerProfile(nextProfile)
     setBetInputError('')
-  }
-
-  const handleToggleSkipStartScreen = (checked: boolean) => {
-    const nextProfile = {
-      ...playerProfile,
-      skipStartScreen: checked,
-      updatedAt: new Date().toISOString(),
-    }
-
-    setOptionsSkipStartScreen(checked)
-    persistLocalPlayerProfile(nextProfile)
   }
 
   const handleClaimDailyReward = () => {
@@ -3806,16 +3788,27 @@ function App() {
     setCasinoStatsResetError('')
   }
 
-  const handleVerifyCasinoStatsReset = () => {
-    if (casinoStatsResetInput.toLowerCase() !== DEV_MODE_PASSWORD) {
-      setCasinoStatsResetError('Incorrect code')
+  const handleVerifyCasinoStatsReset = async () => {
+    if (!casinoStatsResetInput.trim()) {
+      setCasinoStatsResetError('Enter a code first')
       return
     }
 
-    setCasinoStatsResetPromptOpen(false)
-    setCasinoStatsResetConfirmOpen(true)
-    setCasinoStatsResetInput('')
+    setCasinoStatsResetVerifying(true)
     setCasinoStatsResetError('')
+
+    try {
+      await verifyDevAccessCode(casinoStatsResetInput.trim())
+      setCasinoStatsResetPromptOpen(false)
+      setCasinoStatsResetConfirmOpen(true)
+      setCasinoStatsResetInput('')
+      setCasinoStatsResetError('')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to verify code'
+      setCasinoStatsResetError(message)
+    } finally {
+      setCasinoStatsResetVerifying(false)
+    }
   }
 
   const handleConfirmCasinoStatsReset = () => {
@@ -3842,6 +3835,7 @@ function App() {
     setCasinoStatsResetPromptOpen(false)
     setCasinoStatsResetInput('')
     setCasinoStatsResetError('')
+    setCasinoStatsResetVerifying(false)
   }
 
   const handleCancelCasinoStatsReset = () => {
@@ -5328,69 +5322,7 @@ function App() {
 
   return (
     <main className={devMode ? 'dev-mode' : undefined}>
-      {selectedGame === 'intro' ? (
-        <section className="intro-screen intro-screen--full">
-          <img
-            className="intro-screen__image"
-            src="/cover-page.png"
-            alt="Lumex Arcade cover art"
-          />
-          <div className="intro-screen__overlay" />
-          <div className="intro-screen__content">
-            <button
-              type="button"
-              className="intro-screen__button"
-              onClick={() => {
-                setSelectedGame(playerProfile.name.trim() ? 'lobby' : 'intro-name')
-              }}
-            >
-              Continue To Play
-            </button>
-          </div>
-        </section>
-      ) : selectedGame === 'intro-name' ? (
-        <section className="intro-screen intro-screen--full">
-          <img
-            className="intro-screen__image"
-            src="/cover-page.png"
-            alt="Lumex Arcade cover art"
-          />
-          <div className="intro-screen__overlay intro-screen__overlay--strong" />
-          <div className="intro-name">
-            <div className="intro-name__card">
-              <p className="eyebrow">Set Your Profile</p>
-              <h2 className="intro-name__title">What should we call you?</h2>
-              <div className="bet-entry intro-name__entry">
-                <div className="bet-entry__form">
-                  <input
-                    type="text"
-                    value={introNameInput}
-                    onChange={(event) => {
-                      setIntroNameInput(event.target.value)
-                      setIntroNameError('')
-                    }}
-                    placeholder="Enter your name"
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') {
-                        handleSubmitIntroName()
-                      }
-                    }}
-                  />
-                  <button
-                    type="button"
-                    className="bet-entry__apply"
-                    onClick={handleSubmitIntroName}
-                  >
-                    Continue
-                  </button>
-                </div>
-              </div>
-              {introNameError ? <p className="bet-panel__error">{introNameError}</p> : null}
-            </div>
-          </div>
-        </section>
-      ) : (
-        <div className="app-stage">
+      <div className="app-stage">
           <section className="hero">
             <div className="hero__glow hero__glow--left" />
             <div className="hero__glow hero__glow--right" />
@@ -5737,31 +5669,12 @@ function App() {
                       {betInputError ? <p className="bet-panel__error">{betInputError}</p> : null}
                       <div className="roulette-summary">
                         <div className="roulette-summary__row">
-                          <span>Skip start screen</span>
-                          <label className="options-toggle">
-                            <input
-                              type="checkbox"
-                              checked={optionsSkipStartScreen}
-                              onChange={(event) => {
-                                handleToggleSkipStartScreen(event.target.checked)
-                              }}
-                            />
-                            <span className="options-toggle__slider" />
-                          </label>
-                        </div>
-                      </div>
-                      <div className="roulette-summary">
-                        <div className="roulette-summary__row">
                           <span>Player name</span>
                           <strong>{playerProfile.name || 'Not set'}</strong>
                         </div>
                         <div className="roulette-summary__row">
                           <span>Name status</span>
                           <strong>{playerProfile.nameLocked ? 'Locked' : 'Editable'}</strong>
-                        </div>
-                        <div className="roulette-summary__row">
-                          <span>Start screen</span>
-                          <strong>{playerProfile.skipStartScreen ? 'Skipped' : 'Shown'}</strong>
                         </div>
                         <div className="roulette-summary__row">
                           <span>Player ID</span>
@@ -8084,7 +7997,6 @@ function App() {
             </section>
           </div>
         </div>
-      )}
       {devModePromptOpen ? (
         <div className="poker-modal">
           <div className="poker-modal__card poker-modal__card--dev">
@@ -8108,6 +8020,7 @@ function App() {
                       setDevModePromptOpen(false)
                       setDevModeInput('')
                       setDevModeError('')
+                      setDevModeVerifying(false)
                     }
                   }}
                   placeholder="Enter code"
@@ -8121,8 +8034,9 @@ function App() {
                 type="button"
                 className="action-button action-button--primary"
                 onClick={handleSubmitDevModeCode}
+                disabled={devModeVerifying}
               >
-                Confirm
+                {devModeVerifying ? 'Checking...' : 'Confirm'}
               </button>
               <button
                 type="button"
@@ -8131,7 +8045,9 @@ function App() {
                   setDevModePromptOpen(false)
                   setDevModeInput('')
                   setDevModeError('')
+                  setDevModeVerifying(false)
                 }}
+                disabled={devModeVerifying}
               >
                 Cancel
               </button>
@@ -8173,13 +8089,15 @@ function App() {
                 type="button"
                 className="action-button action-button--primary"
                 onClick={handleVerifyCasinoStatsReset}
+                disabled={casinoStatsResetVerifying}
               >
-                Continue
+                {casinoStatsResetVerifying ? 'Checking...' : 'Continue'}
               </button>
               <button
                 type="button"
                 className="action-button"
                 onClick={handleCancelCasinoStatsReset}
+                disabled={casinoStatsResetVerifying}
               >
                 Cancel
               </button>
