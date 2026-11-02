@@ -5,3 +5,6 @@ services:
     buildCommand: npm install && npm run build
     startCommand: npm run start
     autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: ">=24.22.1 <25"  # patched for eMudhra + Oct 2026 Node security release

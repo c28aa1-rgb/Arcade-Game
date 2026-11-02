@@ -1,7 +1,27 @@
-import { useEffect, useRef, useState, type SetStateAction } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type SetStateAction } from 'react'
+import { createPortal } from 'react-dom'
 import { collection, deleteDoc, doc, getDoc, onSnapshot, setDoc } from 'firebase/firestore'
 import { firebaseConfigError, firestore, isFirebaseConfigured } from './firebase'
 import PlinkoBoard from './components/PlinkoBoard'
+import ChickenScene, { type ChickenStatus } from './components/ChickenScene'
+import JetstreamBoard, { type JetstreamStatus } from './components/JetstreamBoard'
+import {
+  formatMultiplier as formatJetMultiplier,
+  generateRound as generateJetRound,
+  rollJetHop,
+  JET_CARRIERS,
+  JET_FLIGHT_MS,
+  type JetRound,
+} from './components/jetstreamLogic'
+import {
+  CHICKEN_DIFFICULTIES,
+  CHICKEN_DIFFICULTY_ORDER,
+  CHICKEN_LANES,
+  formatChickenMultiplier,
+  getChickenConfig,
+  rollChickenHop,
+  type ChickenDifficulty,
+} from './components/chickenLogic'
 
 type RoulettePocket = number | '00'
 
@@ -31,7 +51,7 @@ const PLINKO_ROWS = 12
 const PLINKO_MULTIPLIERS = [24, 7.5, 3.8, 1.4, 0.8, 0.6, 0.35, 0.6, 0.8, 1.4, 3.8, 7.5, 24]
 const SLOT_ROWS = 3
 const SLOT_COLUMNS = 5
-const SUITS = ['■', '●', '▲', '★']
+const SUITS = ['♠', '♥', '♦', '♣']
 const RANKS = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K']
 const ROULETTE_WHEEL_ORDER: RoulettePocket[] = [
   0, 28, 9, 26, 30, 11, 7, 20, 32, 17, 5, 22, 34, 15, 3, 24, 36, 13, 1, '00', 27, 10,
@@ -220,7 +240,7 @@ type CasinoDailyStat = {
 }
 
 type CasinoStatsRange = '7d' | '14d' | '1m' | '3m' | '6m' | '1y'
-type CasinoTrackedGame = 'blackjack' | 'roulette' | 'hilo' | 'mines' | 'plinko' | 'slots' | 'dice'
+type CasinoTrackedGame = 'blackjack' | 'roulette' | 'hilo' | 'mines' | 'plinko' | 'slots' | 'dice' | 'chicken' | 'jetstream'
 
 type SlotRegularSymbol = 'dragon' | 'moon' | 'gem' | 'crown' | 'lotus'
 type SlotJackpot = 'mini' | 'minor' | 'major'
@@ -241,6 +261,26 @@ type PlinkoRound = {
   multiplier: number
   payout: number
   net: number
+}
+
+type ChickenRound = {
+  id: string
+  bet: number
+  difficulty: ChickenDifficulty
+  lane: number
+  multiplier: number
+  payout: number
+  net: number
+  cashed: boolean
+}
+
+type JetstreamRound = {
+  id: string
+  bet: number
+  multiplier: number
+  payout: number
+  net: number
+  cashed: boolean
 }
 
 type RouletteBet =
@@ -348,9 +388,7 @@ const getCardValue = (rank: string) => {
 }
 
 const getSuitColorClass = (suit: string) =>
-  `${suit === '■' || suit === '▲' ? 'playing-card__suit--red' : 'playing-card__suit--black'}${
-    suit === '●' ? ' playing-card__suit--circle' : ''
-  }`
+  suit === '♥' || suit === '♦' ? 'playing-card__suit--red' : 'playing-card__suit--black'
 
 const getHandValue = (hand: Card[]) => {
   let total = hand.reduce((sum, card) => sum + getCardValue(card.rank), 0)
@@ -626,7 +664,7 @@ const clearCasinoGameDailyStats = (game?: CasinoTrackedGame) => {
     return
   }
 
-  ;(['blackjack', 'roulette', 'hilo', 'mines', 'plinko', 'slots', 'dice'] as CasinoTrackedGame[]).forEach((entry) => {
+  ;(['blackjack', 'roulette', 'hilo', 'mines', 'plinko', 'slots', 'dice', 'chicken', 'jetstream'] as CasinoTrackedGame[]).forEach((entry) => {
     window.localStorage.removeItem(getCasinoGameDailyStatsStorageKey(entry))
   })
 }
@@ -634,7 +672,7 @@ const clearCasinoGameDailyStats = (game?: CasinoTrackedGame) => {
 const aggregateCasinoDailyStatsFromGames = (statsByGame: Record<CasinoTrackedGame, CasinoDailyStat[]>) => {
   const totalsByDate = new Map<string, number>()
 
-  ;(['blackjack', 'roulette', 'hilo', 'mines', 'plinko', 'slots', 'dice'] as CasinoTrackedGame[]).forEach((game) => {
+  ;(['blackjack', 'roulette', 'hilo', 'mines', 'plinko', 'slots', 'dice', 'chicken', 'jetstream'] as CasinoTrackedGame[]).forEach((game) => {
     statsByGame[game].forEach((entry) => {
       totalsByDate.set(entry.date, roundSignedMoney((totalsByDate.get(entry.date) ?? 0) + entry.amount))
     })
@@ -653,6 +691,8 @@ const readAllCasinoGameDailyStats = (): Record<CasinoTrackedGame, CasinoDailySta
   plinko: readCasinoGameDailyStats('plinko'),
   slots: readCasinoGameDailyStats('slots'),
   dice: readCasinoGameDailyStats('dice'),
+  chicken: readCasinoGameDailyStats('chicken'),
+  jetstream: readCasinoGameDailyStats('jetstream'),
 })
 
 const syncCasinoDailyStatsWithGames = () => {
@@ -943,13 +983,13 @@ const getHiLoOdds = (
 }
 
 const roundMoney = (value: number) => Number(value.toFixed(2))
-const formatPoints = (value: number) => `${Math.round(value).toLocaleString()} pts`
+const formatPoints = (value: number) => `$${Math.round(value).toLocaleString()}`
 const formatSignedPoints = (value: number) => {
   if (value === 0) {
-    return '0 pts'
+    return '$0'
   }
 
-  return `${value > 0 ? '+' : '-'}${Math.abs(Math.round(value)).toLocaleString()} pts`
+  return `${value > 0 ? '+' : '-'}$${Math.abs(Math.round(value)).toLocaleString()}`
 }
 
 const verifyDevAccessCode = async (code: string) => {
@@ -969,7 +1009,101 @@ const verifyDevAccessCode = async (code: string) => {
 }
 
 const getScoreChangeLabel = (value: number) =>
-  value === 0 ? 'Score unchanged' : `Score ${formatSignedPoints(value)}`
+  value === 0 ? 'Bankroll unchanged' : `Bankroll ${formatSignedPoints(value)}`
+
+// Layout position of an element within a positioned ancestor, via the offset
+// chain. Transform-independent (ignores animation transforms), so it can be
+// read mid-animation to aim a card at its real destination.
+const offsetWithin = (element: HTMLElement | null, ancestor: Element | null) => {
+  let x = 0
+  let y = 0
+  let node: HTMLElement | null = element
+  while (node && node !== ancestor) {
+    x += node.offsetLeft
+    y += node.offsetTop
+    node = node.offsetParent as HTMLElement | null
+  }
+  return { x, y }
+}
+
+// Ref callback for a blackjack card: point its deal keyframe at the shoe so it
+// flips on the deck, then slides to where it actually sits in the hand.
+const aimCardFromDeck = (element: HTMLElement | null) => {
+  if (!element) {
+    return
+  }
+  const felt = element.closest('.blackjack-table__felt') as HTMLElement | null
+  const deck = felt?.querySelector('.blackjack-deck') as HTMLElement | null
+  if (!felt || !deck) {
+    return
+  }
+  const card = offsetWithin(element, felt)
+  const shoe = offsetWithin(deck, felt)
+  element.style.setProperty('--deal-dx', `${shoe.x - card.x}px`)
+  element.style.setProperty('--deal-dy', `${shoe.y - card.y}px`)
+}
+
+const AnimatedMoney = ({ value }: { value: number }) => {
+  const [display, setDisplay] = useState(value)
+  const displayRef = useRef(value)
+  const previousRef = useRef(value)
+  const rafRef = useRef(0)
+  const deltaIdRef = useRef(0)
+  const [deltas, setDeltas] = useState<{ id: number; amount: number }[]>([])
+
+  useEffect(() => {
+    const from = displayRef.current
+    const change = value - previousRef.current
+    previousRef.current = value
+
+    if (Math.abs(change) >= 1) {
+      deltaIdRef.current += 1
+      const id = deltaIdRef.current
+      setDeltas((current) => [...current.slice(-3), { id, amount: change }])
+      window.setTimeout(() => {
+        setDeltas((current) => current.filter((delta) => delta.id !== id))
+      }, 1400)
+    }
+
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    if (reduceMotion || Math.abs(value - from) < 1) {
+      displayRef.current = value
+      setDisplay(value)
+      return
+    }
+
+    const start = performance.now()
+    const duration = 650
+    const tick = (now: number) => {
+      const progress = Math.min(1, (now - start) / duration)
+      const eased = 1 - Math.pow(1 - progress, 3)
+      const next = from + (value - from) * eased
+      displayRef.current = next
+      setDisplay(next)
+      if (progress < 1) {
+        rafRef.current = window.requestAnimationFrame(tick)
+      }
+    }
+    rafRef.current = window.requestAnimationFrame(tick)
+    return () => window.cancelAnimationFrame(rafRef.current)
+  }, [value])
+
+  return (
+    <span className="animated-money">
+      {formatPoints(display)}
+      <span className="animated-money__deltas" aria-hidden="true">
+        {deltas.map((delta) => (
+          <em
+            key={delta.id}
+            className={`money-delta ${delta.amount >= 0 ? 'money-delta--win' : 'money-delta--loss'}`}
+          >
+            {formatSignedPoints(delta.amount)}
+          </em>
+        ))}
+      </span>
+    </span>
+  )
+}
 
 const SLOT_PAYTABLE: Record<SlotRegularSymbol, { 3: number; 4: number; 5: number }> = {
   dragon: { 3: 8, 4: 20, 5: 60 },
@@ -1062,67 +1196,54 @@ const createSlotsSpinTopRow = (betAmount: number): SlotCell[] =>
     Math.random() < 0.24 ? getRandomSlotOrb(betAmount) : { kind: 'symbol' as const, symbol: getRandomSlotSymbol() },
   )
 
-const createSlotsBonusSpinDisplayGrid = (
-  currentGrid: (SlotCell | null)[][],
-  betAmount: number,
-): (SlotCell | null)[][] =>
-  currentGrid.map((row) =>
-    row.map((cell) => {
-      if (cell) {
-        return cell
-      }
+// Reel choreography: the final grid is decided before the animation starts,
+// so what the reels settle on is always exactly what pays out.
+const SLOTS_REEL_STOP_DELAYS_MS = [1050, 1600, 2150, 2700, 3450]
+const SLOTS_REEL_SETTLE_MS = 640
+const SLOTS_REEL_LOOP_CELLS = 6
 
-      return Math.random() < 0.3 ? getRandomSlotOrb(betAmount) : null
-    }),
+const createSlotsFinalGrid = (betAmount: number): SlotCell[][] =>
+  Array.from({ length: SLOT_ROWS }, () => createSlotsSpinTopRow(betAmount))
+
+const createSlotsReelFiller = (): SlotCell[] =>
+  Array.from({ length: SLOTS_REEL_LOOP_CELLS }, () => ({
+    kind: 'symbol' as const,
+    symbol: getRandomSlotSymbol(),
+  }))
+
+const getSlotsWinningCells = (grid: SlotCell[][]): boolean[][] => {
+  const winning = Array.from({ length: SLOT_ROWS }, () =>
+    Array.from({ length: SLOT_COLUMNS }, () => false),
   )
 
-const createSlotsBonusSpinTopRow = (betAmount: number): (SlotCell | null)[] =>
-  Array.from({ length: SLOT_COLUMNS }, () => (Math.random() < 0.3 ? getRandomSlotOrb(betAmount) : null))
+  for (let rowIndex = 0; rowIndex < SLOT_ROWS; rowIndex += 1) {
+    const firstCell = grid[rowIndex][0]
 
-const resolveSlotsVisibleGrid = (grid: (SlotCell | null)[][]): SlotCell[][] =>
-  grid.map((row, rowIndex) =>
-    row.map(
-      (cell, columnIndex) =>
-        cell ?? {
-          kind: 'symbol' as const,
-          symbol: SLOT_SYMBOL_POOL[(columnIndex + rowIndex) % SLOT_SYMBOL_POOL.length],
-        },
-    ),
-  )
+    if (firstCell.kind !== 'symbol') {
+      continue
+    }
 
-const shiftSlotsGridDown = <T,>(grid: T[][], topRow: T[]): T[][] => [
-  [...topRow],
-  [...grid[0]],
-  [...grid[1]],
-]
+    let matchCount = 1
 
-const shiftSlotsGridDownWithStops = <T,>(grid: T[][], topRow: T[], stoppedColumns: boolean[]): T[][] =>
-  Array.from({ length: SLOT_ROWS }, (_, rowIndex) =>
-    Array.from({ length: SLOT_COLUMNS }, (_, columnIndex) => {
-      if (stoppedColumns[columnIndex]) {
-        return grid[rowIndex][columnIndex]
+    for (let columnIndex = 1; columnIndex < SLOT_COLUMNS; columnIndex += 1) {
+      const cell = grid[rowIndex][columnIndex]
+
+      if (cell.kind === 'symbol' && cell.symbol === firstCell.symbol) {
+        matchCount += 1
+      } else {
+        break
       }
+    }
 
-      if (rowIndex === 0) {
-        return topRow[columnIndex]
+    if (matchCount >= 3) {
+      for (let columnIndex = 0; columnIndex < matchCount; columnIndex += 1) {
+        winning[rowIndex][columnIndex] = true
       }
+    }
+  }
 
-      return grid[rowIndex - 1][columnIndex]
-    }),
-  )
-
-const SLOTS_SPIN_TRAIL_LIMIT = Math.ceil(5000 / 140) + 2
-const getRandomSlotsSpinSteps = () => 32 + Math.floor(Math.random() * 8)
-const SLOTS_SPIN_BASE_STEP_MS = 90
-const SLOTS_SPIN_SETTLE_BUFFER_MS = 40
-const SLOTS_COLUMN_STOP_DELAYS_MS = [0, 1000, 1000, 1000, 3000]
-const SLOTS_COLUMN_STOP_CUMULATIVE_MS = SLOTS_COLUMN_STOP_DELAYS_MS.reduce<number[]>(
-  (delays, delay, index) => {
-    delays.push(delay + (delays[index - 1] ?? 0))
-    return delays
-  },
-  [],
-)
+  return winning
+}
 
 const countSlotsBonusSymbols = (grid: SlotCell[][]) =>
   grid.flat().filter((cell) => cell.kind === 'orb').length
@@ -1878,21 +1999,15 @@ const getMinesMultiplier = (safePickCount: number, mineCount: number) => {
     return 1
   }
 
+  // Standard provably-fair Mines payout (Stake/Rainbet): the fair multiplier is
+  // the inverse of the odds of having cleared this many safe tiles, scaled by a
+  // 1% house edge. multiplier = (1 - edge) * ∏ (tilesLeft / safeTilesLeft).
   let multiplier = MINES_EDGE
 
   for (let index = 0; index < clampedSafePickCount; index += 1) {
     const remainingTiles = MINES_TILE_COUNT - index
     const remainingSafeTiles = remainingTiles - clampedMineCount
-    const exactStepMultiplier = remainingTiles / remainingSafeTiles
-
-    // Start with gentler growth, then converge toward the true risk curve
-    // as the board gets thinner and each safe click becomes less likely.
-    const progress = maxSafePicks > 1 ? index / (maxSafePicks - 1) : 1
-    const currentMineRisk = clampedMineCount / remainingTiles
-    const stepWeight = Math.min(1, 0.24 + progress * 0.5 + currentMineRisk * 1.25)
-    const softenedStepMultiplier = 1 + (exactStepMultiplier - 1) * stepWeight
-
-    multiplier *= softenedStepMultiplier
+    multiplier *= remainingTiles / remainingSafeTiles
   }
 
   return Number(multiplier.toFixed(2))
@@ -1922,24 +2037,11 @@ const DICE_SUM_DISTRIBUTION = (() => {
 })()
 
 const DICE_TOTAL_OUTCOMES = 6 ** DICE_COUNT
-const DICE_MULTIPLIER_CURVE = [
-  { winChance: 1, multiplier: 1.01 },
-  { winChance: 0.999, multiplier: 1.02 },
-  { winChance: 0.99, multiplier: 1.12 },
-  { winChance: 0.95, multiplier: 1.45 },
-  { winChance: 0.9, multiplier: 2.1 },
-  { winChance: 0.8, multiplier: 3.8 },
-  { winChance: 0.7, multiplier: 6.5 },
-  { winChance: 0.6, multiplier: 9.5 },
-  { winChance: 0.5, multiplier: 13.5 },
-  { winChance: 0.4, multiplier: 20 },
-  { winChance: 0.3, multiplier: 35 },
-  { winChance: 0.2, multiplier: 70 },
-  { winChance: 0.1, multiplier: 160 },
-  { winChance: 0.05, multiplier: 300 },
-  { winChance: 0.01, multiplier: 700 },
-  { winChance: 0, multiplier: DICE_MAX_MULTIPLIER },
-] as const
+// Standard "dice" payout, same as Stake/Rainbet: fair odds minus a 1% house
+// edge (99% RTP). multiplier = (1 - houseEdge) / winChance, so a ~50% bet pays
+// ~2x and the edge is constant across the whole target range.
+const DICE_HOUSE_EDGE = 0.01
+const DICE_MIN_MULTIPLIER = 1.01
 
 const clampDiceTarget = (value: number) =>
   Math.min(DICE_MAX_TOTAL, Math.max(DICE_MIN_TOTAL, Math.round(value)))
@@ -1972,19 +2074,9 @@ const getDiceMultiplier = (target: number, mode: DiceMode) => {
     return 0
   }
 
-  for (let index = 0; index < DICE_MULTIPLIER_CURVE.length - 1; index += 1) {
-    const upper = DICE_MULTIPLIER_CURVE[index]
-    const lower = DICE_MULTIPLIER_CURVE[index + 1]
-
-    if (winChance <= upper.winChance && winChance >= lower.winChance) {
-      const span = upper.winChance - lower.winChance
-      const ratio = span === 0 ? 0 : (upper.winChance - winChance) / span
-      const interpolatedMultiplier = upper.multiplier + (lower.multiplier - upper.multiplier) * ratio
-      return Number(interpolatedMultiplier.toFixed(2))
-    }
-  }
-
-  return DICE_MAX_MULTIPLIER
+  const fairMultiplier = (1 - DICE_HOUSE_EDGE) / winChance
+  const clamped = Math.min(DICE_MAX_MULTIPLIER, Math.max(DICE_MIN_MULTIPLIER, fairMultiplier))
+  return Number(clamped.toFixed(2))
 }
 
 const getDiceWinChanceLabel = (winChance: number) => {
@@ -2002,8 +2094,9 @@ const getDiceWinChanceLabel = (winChance: number) => {
     return `${percent.toFixed(3)}%`
   }
 
-  if (percent > 99.99) {
-    return '>99.99%'
+  // You can always lose, so never show a full 100% — cap the display at 99.9%.
+  if (percent >= 99.9) {
+    return '99.90%'
   }
 
   if (percent > 99) {
@@ -2107,30 +2200,32 @@ const getRoundResult = (
     const playerTotal = getHandValue(hand)
     const wager = handBets[index]
     const label = playerHands.length > 1 ? `Hand ${index + 1}` : 'You'
+    // "You lose" but "Hand 1 loses" — the verb agrees with the subject
+    const s = label === 'You' ? '' : 's'
 
     if (playerTotal > 21) {
-      summaries.push(`${label} goes over with ${playerTotal}.`)
+      summaries.push(`${label} bust${s} with ${playerTotal}.`)
       return
     }
 
     if (dealerTotal > 21) {
-      summaries.push(`${label} clears it. Lead hand goes over with ${dealerTotal}.`)
+      summaries.push(`${label} win${s}. Dealer busts with ${dealerTotal}.`)
       payout += wager * 2
       return
     }
 
     if (playerTotal > dealerTotal) {
-      summaries.push(`${label} wins ${playerTotal} to ${dealerTotal}.`)
+      summaries.push(`${label} win${s} ${playerTotal} to ${dealerTotal}.`)
       payout += wager * 2
       return
     }
 
     if (playerTotal < dealerTotal) {
-      summaries.push(`${label} loses ${playerTotal} to ${dealerTotal}.`)
+      summaries.push(`${label} lose${s} ${playerTotal} to ${dealerTotal}.`)
       return
     }
 
-    summaries.push(`${label} ties at ${playerTotal}.`)
+    summaries.push(`${label} tie${s} at ${playerTotal}.`)
     payout += wager
   })
 
@@ -2142,16 +2237,18 @@ const getRoundResult = (
 
 function App() {
   const ROULETTE_SPIN_DURATION_MS = 7000
-  const TRACKED_CASINO_GAMES: CasinoTrackedGame[] = ['blackjack', 'roulette', 'hilo', 'mines', 'plinko', 'slots', 'dice']
+  const TRACKED_CASINO_GAMES: CasinoTrackedGame[] = ['blackjack', 'roulette', 'hilo', 'mines', 'plinko', 'slots', 'dice', 'chicken', 'jetstream']
   const getCasinoTrackedGameLabel = (game: CasinoTrackedGame) =>
     ({
-      blackjack: 'Twenty-One',
-      roulette: 'Color Wheel',
-      hilo: 'Up Down',
-      mines: 'Safe Steps',
-      plinko: 'Peg Drop',
-      slots: 'Symbol Spin',
-      dice: 'Dice Path',
+      blackjack: 'Blackjack',
+      roulette: 'Roulette',
+      hilo: 'Hi-Lo',
+      mines: 'Mines',
+      plinko: 'Plinko',
+      slots: 'Slots',
+      dice: 'Dice',
+      chicken: 'Chicken Cross',
+      jetstream: 'Jetstream',
     })[game]
 
   const [playerProfile, setPlayerProfile] = useState<LocalPlayerProfile>(() =>
@@ -2174,6 +2271,8 @@ function App() {
     | 'slots'
     | 'plinko'
     | 'dice'
+    | 'chicken'
+    | 'jetstream'
   >(() => 'lobby')
   const [bankroll, setBankrollState] = useState(() =>
     normalizeBankroll(getOrCreateLocalPlayerProfile().bankroll),
@@ -2203,7 +2302,7 @@ function App() {
   const [hiLoResult, setHiLoResult] = useState<RoundResult | null>(null)
   const [hiLoStreak, setHiLoStreak] = useState(0)
   const [hiLoMultiplier, setHiLoMultiplier] = useState(1)
-  const [hiLoMessage, setHiLoMessage] = useState('Set your play amount, then reveal the first card.')
+  const [hiLoMessage, setHiLoMessage] = useState('Set your bet, then reveal the first card.')
   const [hiLoResolving, setHiLoResolving] = useState(false)
   const [hiLoSliding, setHiLoSliding] = useState(false)
   const [minesBoard, setMinesBoard] = useState<MinesTile[]>([])
@@ -2211,30 +2310,72 @@ function App() {
   const [minesCountInput, setMinesCountInput] = useState(String(DEFAULT_MINES_COUNT))
   const [minesSafePicks, setMinesSafePicks] = useState(0)
   const [minesResult, setMinesResult] = useState<RoundResult | null>(null)
-  const [minesMessage, setMinesMessage] = useState('Set your play amount, then start the safe-step board.')
+  const [minesMessage, setMinesMessage] = useState('Set your bet, then step onto the minefield.')
   const [minesRoundActive, setMinesRoundActive] = useState(false)
   const [pendingPlinkoDrops, setPendingPlinkoDrops] = useState<PendingPlinkoDrop[]>([])
   const [plinkoHistory, setPlinkoHistory] = useState<PlinkoRound[]>([])
   const [plinkoInFlightDrops, setPlinkoInFlightDrops] = useState(0)
-  const [plinkoMessage, setPlinkoMessage] = useState('Set your play amount, then drop a ball down the board.')
+  const [plinkoMessage, setPlinkoMessage] = useState('Set your bet, then drop a ball down the board.')
   const [plinkoResult, setPlinkoResult] = useState<PlinkoRound | null>(null)
   const [plinkoWinStreak, setPlinkoWinStreak] = useState(0)
+  const [chickenDifficulty, setChickenDifficulty] = useState<ChickenDifficulty>('easy')
+  const [chickenStatus, setChickenStatus] = useState<ChickenStatus>('idle')
+  const [chickenLane, setChickenLane] = useState(0)
+  const [chickenBet, setChickenBet] = useState(0)
+  const [chickenDeathLane, setChickenDeathLane] = useState<number | null>(null)
+  const [chickenMessage, setChickenMessage] = useState('Pick a difficulty, set your bet, and start crossing.')
+  const [chickenResult, setChickenResult] = useState<ChickenRound | null>(null)
+  const [chickenHistory, setChickenHistory] = useState<ChickenRound[]>([])
+  const [fullscreenTopOffset, setFullscreenTopOffset] = useState(64)
+  const chickenHopLockRef = useRef(false)
+
+  // Keep fullscreen game overlays (chicken, jetstream) docked below the top header.
+  useEffect(() => {
+    if (selectedGame !== 'chicken' && selectedGame !== 'jetstream') return
+    const measure = () => {
+      const hero = document.querySelector('.hero') as HTMLElement | null
+      const bottom = hero ? hero.getBoundingClientRect().bottom : 64
+      setFullscreenTopOffset(Math.max(0, Math.round(bottom)))
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    const raf = window.requestAnimationFrame(measure)
+    return () => {
+      window.removeEventListener('resize', measure)
+      window.cancelAnimationFrame(raf)
+    }
+  }, [selectedGame])
+  const [jetstreamStatus, setJetstreamStatus] = useState<JetstreamStatus>('idle')
+  const [jetstreamBet, setJetstreamBet] = useState(0)
+  const [jetstreamRound, setJetstreamRound] = useState<JetRound | null>(null)
+  const [jetstreamCarrier, setJetstreamCarrier] = useState(0)
+  const [jetstreamSplashSegment, setJetstreamSplashSegment] = useState<number | null>(null)
+  const [jetstreamBusy, setJetstreamBusy] = useState(false)
+  const [jetstreamMessage, setJetstreamMessage] = useState('Set your bet and launch the seaplane.')
+  const [jetstreamResult, setJetstreamResult] = useState<JetstreamRound | null>(null)
+  const [jetstreamHistory, setJetstreamHistory] = useState<JetstreamRound[]>([])
+  const jetstreamMultiplierRef = useRef<{ value: number }>({ value: 1 })
+  const jetstreamRoundRef = useRef<JetRound | null>(null)
+  const jetstreamCarrierRef = useRef(0)
+  const jetstreamBusyRef = useRef(false)
+  const jetstreamBetRef = useRef(0)
   const [slotsGrid, setSlotsGrid] = useState<SlotCell[][]>(() => createInitialSlotsGrid())
   const [slotsBonusGrid, setSlotsBonusGrid] = useState<(SlotCell | null)[][]>(() =>
     createSlotsBonusGridFromSpin(createInitialSlotsGrid()),
   )
-  const [slotsMessage, setSlotsMessage] = useState('Set your play amount, then spin the reels.')
+  const [slotsMessage, setSlotsMessage] = useState('Set your bet, then spin the reels.')
   const [slotsResult, setSlotsResult] = useState<RoundResult | null>(null)
   const [slotsSpinning, setSlotsSpinning] = useState(false)
-  const [slotsStopping, setSlotsStopping] = useState(false)
-  const [slotsSpinAnimationMs, setSlotsSpinAnimationMs] = useState(140)
   const [slotsStoppedColumns, setSlotsStoppedColumns] = useState<boolean[]>(
     () => Array.from({ length: SLOT_COLUMNS }, () => false),
   )
-  const [slotsSpinTrailRows, setSlotsSpinTrailRows] = useState<(SlotCell | null)[][]>([])
-  const [slotsSpinFromGrid, setSlotsSpinFromGrid] = useState<(SlotCell | null)[][] | null>(null)
-  const [slotsSpinDisplayGrid, setSlotsSpinDisplayGrid] = useState<(SlotCell | null)[][] | null>(null)
-  const [slotsSpinFrame, setSlotsSpinFrame] = useState(0)
+  const [slotsSpinTarget, setSlotsSpinTarget] = useState<{
+    token: number
+    fromGrid: (SlotCell | null)[][]
+    finalGrid: (SlotCell | null)[][]
+    fillers: SlotCell[][]
+  } | null>(null)
+  const [slotsWinningCells, setSlotsWinningCells] = useState<boolean[][] | null>(null)
   const [slotsBonusActive, setSlotsBonusActive] = useState(false)
   const [slotsBonusRespins, setSlotsBonusRespins] = useState(3)
   const [slotsBonusBasePayout, setSlotsBonusBasePayout] = useState(0)
@@ -2334,11 +2475,10 @@ function App() {
   const diceResolveTimeoutRef = useRef<number | null>(null)
   const diceRollIntervalRef = useRef<number | null>(null)
   const slotsResolveTimeoutRef = useRef<number | null>(null)
-  const slotsSpinIntervalRef = useRef<number | null>(null)
-  const slotsSpinDisplayGridRef = useRef<(SlotCell | null)[][] | null>(null)
-  const slotsStoppedColumnsRef = useRef<boolean[]>(Array.from({ length: SLOT_COLUMNS }, () => false))
-  const slotsSpinTrailRowsRef = useRef<(SlotCell | null)[][]>([])
+  const slotsSpinTokenRef = useRef(0)
   const slotsColumnStopTimeoutsRef = useRef<number[]>([])
+  const pendingPlinkoDropsRef = useRef<PendingPlinkoDrop[]>([])
+  const settledPlinkoIdsRef = useRef<Set<string>>(new Set())
   const autoCashoutSnapshotRef = useRef({
     playerProfileId: playerProfile.id,
     bankroll,
@@ -2529,35 +2669,23 @@ function App() {
   const diceBottomRow = (diceValues.length ? diceValues : Array.from({ length: DICE_COUNT }, () => 0)).slice(DICE_ROW_COUNT)
   const diceTotal = diceValues.length === DICE_COUNT ? getDiceTotal(diceValues) : null
   const slotsBaseGrid = slotsBonusActive ? slotsBonusGrid : slotsGrid
-  const slotsAnimatedFromGrid = slotsSpinFromGrid ?? slotsSpinDisplayGrid ?? slotsBaseGrid
-  const slotsAnimatedToGrid = slotsSpinDisplayGrid ?? slotsBaseGrid
-  const slotsDisplayedColumns = Array.from({ length: SLOT_COLUMNS }, (_, columnIndex) => ({
-    from: Array.from(
-      { length: SLOT_ROWS },
-      (_, rowIndex) => slotsAnimatedFromGrid[rowIndex]?.[columnIndex] ?? null,
-    ),
-    to: Array.from({ length: SLOT_ROWS }, (_, rowIndex) => slotsAnimatedToGrid[rowIndex]?.[columnIndex] ?? null),
+  const slotsFinalGrid = slotsSpinTarget?.finalGrid ?? slotsBaseGrid
+  const slotsFromGrid = slotsSpinTarget?.fromGrid ?? slotsBaseGrid
+  const slotsColumns = Array.from({ length: SLOT_COLUMNS }, (_, columnIndex) => ({
+    final: Array.from({ length: SLOT_ROWS }, (_, rowIndex) => slotsFinalGrid[rowIndex]?.[columnIndex] ?? null),
+    previous: Array.from({ length: SLOT_ROWS }, (_, rowIndex) => slotsFromGrid[rowIndex]?.[columnIndex] ?? null),
+    filler: slotsSpinTarget?.fillers[columnIndex] ?? [],
   }))
-  const getSlotsCellClassName = (cell: SlotCell | null) =>
+  const getSlotsCellClassName = (cell: SlotCell | null, rowIndex?: number, columnIndex?: number) =>
     `slots-machine__reel${
       cell?.kind === 'orb' ? ' slots-machine__reel--orb' : ''
     }${cell?.kind === 'orb' && cell.jackpot ? ` slots-machine__reel--${cell.jackpot}` : ''}${
-      slotsSpinning ? ' slots-machine__reel--spinning' : ''
-    }${slotsBonusActive && !cell ? ' slots-machine__reel--empty' : ''}`;
-  const getSlotsFallbackCell = (columnIndex: number, rowIndex: number): SlotCell => ({
-    kind: 'symbol',
-    symbol: SLOT_SYMBOL_POOL[(columnIndex + rowIndex) % SLOT_SYMBOL_POOL.length],
-  })
-  const getSlotsColumnTrackCells = (
-    columnIndex: number,
-    column: { from: (SlotCell | null)[]; to: (SlotCell | null)[] },
-  ) => [
-    column.to[0] ?? null,
-    column.from[0] ?? null,
-    column.from[1] ?? null,
-    column.from[2] ?? null,
-    ...slotsSpinTrailRows.map((row) => row[columnIndex] ?? null),
-  ]
+      !cell ? ' slots-machine__reel--empty' : ''
+    }${
+      rowIndex !== undefined && columnIndex !== undefined && slotsWinningCells?.[rowIndex]?.[columnIndex]
+        ? ' slots-machine__reel--win'
+        : ''
+    }`
   const renderSlotsCellContent = (cell: SlotCell | null, fallbackCell?: SlotCell) => {
     const displayCell = cell ?? fallbackCell ?? null
 
@@ -2582,18 +2710,6 @@ function App() {
 
     return <span className="slots-machine__symbol-mark">{SLOT_SYMBOL_ICONS[displayCell.symbol]}</span>
   }
-
-  useEffect(() => {
-    slotsSpinDisplayGridRef.current = slotsSpinDisplayGrid
-  }, [slotsSpinDisplayGrid])
-
-  useEffect(() => {
-    slotsStoppedColumnsRef.current = slotsStoppedColumns
-  }, [slotsStoppedColumns])
-
-  useEffect(() => {
-    slotsSpinTrailRowsRef.current = slotsSpinTrailRows
-  }, [slotsSpinTrailRows])
 
   useEffect(() => {
     autoCashoutSnapshotRef.current = {
@@ -2680,6 +2796,47 @@ function App() {
       unsubscribe()
     }
   }, [playerProfile.id])
+
+  useEffect(() => {
+    pendingPlinkoDropsRef.current = pendingPlinkoDrops
+  }, [pendingPlinkoDrops])
+
+  // Hi-Lo reveal: once the revealed card has mounted in the "Next" slot, flip it
+  // face-up in place then slide it exactly onto the current card. Driven by the
+  // Web Animations API with the measured distance baked in (a CSS var in a
+  // keyframe is resolved at animation-creation time in some engines, which left
+  // the card landing short — WAAPI avoids that entirely).
+  useLayoutEffect(() => {
+    if (!hiLoNextCard) {
+      return
+    }
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      return
+    }
+    const overlay = document.querySelector('.hilo-card--overlay') as HTMLElement | null
+    const base = document.querySelector('.hilo-card--base') as HTMLElement | null
+    const currentCard = document
+      .querySelectorAll('.hilo-card-slot')[0]
+      ?.querySelector('.playing-card') as HTMLElement | null
+    if (!overlay || !base || !currentCard) {
+      return
+    }
+    // base sits exactly where the overlay rests, so the delta from base -> current
+    // is how far the overlay must travel to cover the current card.
+    const rest = base.getBoundingClientRect()
+    const target = currentCard.getBoundingClientRect()
+    const dx = target.left - rest.left
+    const dy = target.top - rest.top
+    overlay.animate(
+      [
+        { transform: 'translate(0px, 0px) rotateY(-92deg)', easing: 'cubic-bezier(0.3, 0.7, 0.3, 1)' },
+        { transform: 'translate(0px, 0px) rotateY(0deg)', offset: 0.32, easing: 'linear' },
+        { transform: 'translate(0px, 0px) rotateY(0deg)', offset: 0.46, easing: 'cubic-bezier(0.34, 0.86, 0.3, 1)' },
+        { transform: `translate(${dx}px, ${dy}px) rotateY(0deg)` },
+      ],
+      { duration: 660, fill: 'forwards' },
+    )
+  }, [hiLoNextCard])
 
   useEffect(() => {
     void syncRemotePlayerProfile(playerProfile)
@@ -2788,6 +2945,9 @@ function App() {
 
   useEffect(() => {
     const handleDevModeKeydown = (event: KeyboardEvent) => {
+      // Dev mode is checked by server.mjs, which only exists on Render. The static GitHub Pages build has no server.
+      if (import.meta.env.VITE_STATIC_HOST === 'pages') return
+
       const target = event.target as HTMLElement | null
 
       if (
@@ -3112,11 +3272,6 @@ function App() {
       slotsResolveTimeoutRef.current = null
     }
 
-    if (slotsSpinIntervalRef.current) {
-      window.clearTimeout(slotsSpinIntervalRef.current)
-      slotsSpinIntervalRef.current = null
-    }
-
     slotsColumnStopTimeoutsRef.current.forEach((timeoutId) => {
       window.clearTimeout(timeoutId)
     })
@@ -3143,7 +3298,7 @@ function App() {
     setHiLoMultiplier(1)
     setHiLoResolving(false)
     setHiLoSliding(false)
-    setHiLoMessage('Set your play amount, then reveal the first card.')
+    setHiLoMessage('Set your bet, then reveal the first card.')
     setMinesBoard([])
     setMinesSafePicks(0)
     setMinesCountInput(String(minesCount))
@@ -3151,6 +3306,7 @@ function App() {
     setMinesMessage('Set your bet, then start the minefield.')
     setMinesRoundActive(false)
     setPendingPlinkoDrops([])
+    settledPlinkoIdsRef.current.clear()
     setPlinkoInFlightDrops(0)
     setPlinkoMessage('Set your bet, then drop a ball down the board.')
     setPlinkoResult(null)
@@ -3159,13 +3315,9 @@ function App() {
     setSlotsMessage('Set your bet, then spin the reels.')
     setSlotsResult(null)
     setSlotsSpinning(false)
-    setSlotsStopping(false)
-    setSlotsSpinAnimationMs(140)
     setSlotsStoppedColumns(Array.from({ length: SLOT_COLUMNS }, () => false))
-    setSlotsSpinTrailRows([])
-    setSlotsSpinFromGrid(null)
-    setSlotsSpinDisplayGrid(null)
-    setSlotsSpinFrame(0)
+    setSlotsSpinTarget(null)
+    setSlotsWinningCells(null)
     setSlotsBonusActive(false)
     setSlotsBonusRespins(3)
     setSlotsBonusBasePayout(0)
@@ -3213,7 +3365,7 @@ function App() {
     }
 
     if (parsedBet > bankroll) {
-      setBetInputError(`Play amount cannot be more than your score of ${formatPoints(bankroll)}.`)
+      setBetInputError(`Bet cannot be more than your bankroll of ${formatPoints(bankroll)}.`)
       return
     }
 
@@ -3303,7 +3455,7 @@ function App() {
     }
 
     if (bet > bankroll) {
-      setBetInputError(`Play amount cannot be more than your score of ${formatPoints(bankroll)}.`)
+      setBetInputError(`Bet cannot be more than your bankroll of ${formatPoints(bankroll)}.`)
       return
     }
 
@@ -3363,6 +3515,63 @@ function App() {
     }, 1400)
   }
 
+  const beginSlotsSpin = (
+    fromGrid: (SlotCell | null)[][],
+    finalGrid: (SlotCell | null)[][],
+    onSettled: () => void,
+  ) => {
+    slotsColumnStopTimeoutsRef.current.forEach((timeoutId) => {
+      window.clearTimeout(timeoutId)
+    })
+    slotsColumnStopTimeoutsRef.current = []
+
+    if (slotsResolveTimeoutRef.current) {
+      window.clearTimeout(slotsResolveTimeoutRef.current)
+      slotsResolveTimeoutRef.current = null
+    }
+
+    setSlotsResult(null)
+    setSlotsWinningCells(null)
+
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      onSettled()
+      return
+    }
+
+    slotsSpinTokenRef.current += 1
+    setSlotsSpinTarget({
+      token: slotsSpinTokenRef.current,
+      fromGrid,
+      finalGrid,
+      fillers: Array.from({ length: SLOT_COLUMNS }, () => createSlotsReelFiller()),
+    })
+    setSlotsSpinning(true)
+    setSlotsStoppedColumns(Array.from({ length: SLOT_COLUMNS }, () => false))
+
+    SLOTS_REEL_STOP_DELAYS_MS.forEach((delay, columnIndex) => {
+      const isLastColumn = columnIndex === SLOT_COLUMNS - 1
+      const timeoutId = window.setTimeout(() => {
+        setSlotsStoppedColumns((current) =>
+          current.map((stopped, index) => (index === columnIndex ? true : stopped)),
+        )
+
+        // Resolve only after the last reel has had its full settle animation,
+        // measured from when its stop actually happened (not wall-clock), so
+        // the settled symbols are never cut over to the final face mid-motion.
+        if (isLastColumn) {
+          slotsResolveTimeoutRef.current = window.setTimeout(() => {
+            setSlotsSpinning(false)
+            setSlotsSpinTarget(null)
+            setSlotsStoppedColumns(Array.from({ length: SLOT_COLUMNS }, () => false))
+            slotsResolveTimeoutRef.current = null
+            onSettled()
+          }, SLOTS_REEL_SETTLE_MS + 140)
+        }
+      }, delay)
+      slotsColumnStopTimeoutsRef.current.push(timeoutId)
+    })
+  }
+
   const handleSpinSlots = () => {
     if (slotsSpinning) {
       return
@@ -3370,283 +3579,119 @@ function App() {
 
     if (slotsBonusActive) {
       const currentBet = slotsBonusBet || bet
-      const currentBonusGrid = slotsBonusGrid.map((row) => [...row])
-      const initialBonusSpinGrid = shiftSlotsGridDown(
-        currentBonusGrid,
-        createSlotsBonusSpinTopRow(currentBet),
+      const previousBonusGrid = slotsBonusGrid.map((row) => [...row])
+      const { nextGrid, newOrbCount } = respinSlotsBonusGrid(previousBonusGrid, currentBet)
+      const respinsLeft = slotsBonusRespins
+
+      setSlotsMessage(
+        `Hold & spin in progress. ${respinsLeft} respin${respinsLeft === 1 ? '' : 's'} left.`,
       )
-      const bonusSpinSteps = getRandomSlotsSpinSteps()
-      let completedSpinSteps = 1
-      let stopSequenceStarted = false
-      let finalized = false
-      let stopSequenceStartedAt = 0
-      setSlotsSpinning(true)
-      setSlotsStopping(false)
-      setSlotsSpinAnimationMs(SLOTS_SPIN_BASE_STEP_MS)
-      setSlotsStoppedColumns(Array.from({ length: SLOT_COLUMNS }, () => false))
-      setSlotsSpinTrailRows([])
-      setSlotsSpinFromGrid(currentBonusGrid)
-      setSlotsSpinDisplayGrid(initialBonusSpinGrid)
-      setSlotsSpinFrame(1)
-      setSlotsResult(null)
-      setSlotsMessage(`Hold & spin in progress. ${slotsBonusRespins} respin${slotsBonusRespins === 1 ? '' : 's'} left.`)
+      beginSlotsSpin(previousBonusGrid, nextGrid, () => {
+        const filledCount = nextGrid.flat().filter(Boolean).length
+        const nextRespins = newOrbCount > 0 ? 3 : respinsLeft - 1
 
-      if (slotsSpinIntervalRef.current) {
-        window.clearTimeout(slotsSpinIntervalRef.current)
-      }
-      slotsColumnStopTimeoutsRef.current.forEach((timeoutId) => {
-        window.clearTimeout(timeoutId)
-      })
-      slotsColumnStopTimeoutsRef.current = []
+        setSlotsBonusGrid(nextGrid)
 
-      const runBonusSpinStep = (gridAtStep: (SlotCell | null)[][]) => {
-        const stepDuration = SLOTS_SPIN_BASE_STEP_MS
-        const now = Date.now()
-        const nextStoppedColumns = stopSequenceStarted
-          ? SLOTS_COLUMN_STOP_CUMULATIVE_MS.map((delay) => now - stopSequenceStartedAt >= delay)
-          : Array.from({ length: SLOT_COLUMNS }, () => false)
-        const nextTrailRows = [gridAtStep[2], ...slotsSpinTrailRowsRef.current].slice(
-          0,
-          SLOTS_SPIN_TRAIL_LIMIT,
-        )
-        const nextSpinGrid = shiftSlotsGridDownWithStops(
-          gridAtStep,
-          createSlotsBonusSpinTopRow(currentBet),
-          nextStoppedColumns,
-        )
-
-        setSlotsStopping(stopSequenceStarted)
-        setSlotsSpinAnimationMs(stepDuration)
-        setSlotsSpinFromGrid(gridAtStep)
-        setSlotsSpinTrailRows(nextTrailRows)
-        setSlotsStoppedColumns(nextStoppedColumns)
-        setSlotsSpinDisplayGrid(nextSpinGrid)
-        setSlotsSpinFrame((currentFrame) => currentFrame + 1)
-        completedSpinSteps += 1
-
-        if (!stopSequenceStarted && completedSpinSteps >= bonusSpinSteps) {
-          stopSequenceStarted = true
-          stopSequenceStartedAt = Date.now()
-          setSlotsStopping(true)
-        }
-
-        if (stopSequenceStarted && nextStoppedColumns.every(Boolean)) {
-          if (finalized) {
-            return
+        if (filledCount === SLOT_ROWS * SLOT_COLUMNS || nextRespins <= 0) {
+          const bonusPayout = calculateSlotsBonusPayout(nextGrid, currentBet)
+          const totalPayout = slotsBonusBasePayout + bonusPayout.totalPayout
+          const result: RoundResult = {
+            message: `Bonus complete. You collected $${bonusPayout.totalPayout}.`,
+            delta: totalPayout - currentBet,
+            payout: bonusPayout.totalPayout,
           }
 
-          finalized = true
-          slotsResolveTimeoutRef.current = window.setTimeout(() => {
-            const finalGrid = (slotsSpinDisplayGridRef.current ?? nextSpinGrid) as (SlotCell | null)[][]
-            const filledCount = finalGrid.flat().filter(Boolean).length
-            const orbCount = finalGrid.flat().filter((cell) => cell?.kind === 'orb').length
-            const nextRespins = orbCount >= 6 ? 3 : slotsBonusRespins - 1
-
-            setSlotsBonusGrid(finalGrid)
-            setSlotsSpinning(false)
-            setSlotsStopping(false)
-            setSlotsSpinAnimationMs(SLOTS_SPIN_BASE_STEP_MS)
-            setSlotsStoppedColumns(Array.from({ length: SLOT_COLUMNS }, () => false))
-            setSlotsSpinTrailRows([])
-            setSlotsSpinFromGrid(null)
-            setSlotsSpinDisplayGrid(null)
-            setSlotsSpinFrame(0)
-
-            if (filledCount === SLOT_ROWS * SLOT_COLUMNS || nextRespins <= 0) {
-              const bonusPayout = calculateSlotsBonusPayout(finalGrid, currentBet)
-              const totalPayout = slotsBonusBasePayout + bonusPayout.totalPayout
-              const result: RoundResult = {
-                message: `Bonus complete. You collected $${bonusPayout.totalPayout}.`,
-                delta: totalPayout - currentBet,
-                payout: bonusPayout.totalPayout,
-              }
-
-              setSlotsBonusActive(false)
-              setSlotsBonusRespins(0)
-              setSlotsResult(result)
-              setSlotsMessage(
-                `${result.message} ${
-                  bonusPayout.hitGrand
-                    ? `Grand jackpot lands for $${slotsJackpots.grand}.`
-                    : bonusPayout.majorCount > 0 || bonusPayout.minorCount > 0 || bonusPayout.miniCount > 0
-                      ? 'Jackpot orb hits included.'
-                      : `Orb total $${bonusPayout.orbValueTotal}.`
-                }`,
-              )
-              setBankroll((currentBankroll) => currentBankroll + result.payout)
-              applyPlayerDailyDelta(result.delta)
-              applyCasinoDailyDelta(result.delta)
-              applyCasinoGameDailyDelta('slots', result.delta)
-              slotsResolveTimeoutRef.current = null
-              return
-            }
-
-            setSlotsBonusRespins(nextRespins)
-            setSlotsMessage(
-              orbCount >= 6
-                ? `${orbCount} orb${orbCount === 1 ? '' : 's'} landed. Respins reset to 3.`
-                : `No new orb this spin. ${nextRespins} respin${nextRespins === 1 ? '' : 's'} left.`,
-            )
-            slotsResolveTimeoutRef.current = null
-          }, stepDuration + SLOTS_SPIN_SETTLE_BUFFER_MS)
+          setSlotsBonusActive(false)
+          setSlotsBonusRespins(0)
+          setSlotsResult(result)
+          setSlotsMessage(
+            `${result.message} ${
+              bonusPayout.hitGrand
+                ? `Grand jackpot lands for $${slotsJackpots.grand}.`
+                : bonusPayout.majorCount > 0 || bonusPayout.minorCount > 0 || bonusPayout.miniCount > 0
+                  ? 'Jackpot orb hits included.'
+                  : `Orb total $${bonusPayout.orbValueTotal}.`
+            }`,
+          )
+          setBankroll((currentBankroll) => currentBankroll + result.payout)
+          applyPlayerDailyDelta(result.delta)
+          applyCasinoDailyDelta(result.delta)
+          applyCasinoGameDailyDelta('slots', result.delta)
           return
         }
 
-        slotsSpinIntervalRef.current = window.setTimeout(() => {
-          runBonusSpinStep(nextSpinGrid)
-        }, stepDuration)
-      }
-
-      slotsSpinIntervalRef.current = window.setTimeout(() => {
-        runBonusSpinStep(initialBonusSpinGrid)
-      }, SLOTS_SPIN_BASE_STEP_MS)
-
+        setSlotsBonusRespins(nextRespins)
+        setSlotsMessage(
+          newOrbCount > 0
+            ? `${newOrbCount} new orb${newOrbCount === 1 ? '' : 's'} locked in. Respins reset to 3.`
+            : `No new orb this spin. ${nextRespins} respin${nextRespins === 1 ? '' : 's'} left.`,
+        )
+      })
       return
     }
 
     if (!canPlaceBets) {
-      setBetInputError('You are out of points.')
+      setBetInputError('Your bankroll is empty.')
       return
     }
 
     if (bet > bankroll) {
-      setBetInputError(`Play amount cannot be more than your score of ${formatPoints(bankroll)}.`)
+      setBetInputError(`Bet cannot be more than your bankroll of ${formatPoints(bankroll)}.`)
       return
     }
 
     setBankroll((currentBankroll) => currentBankroll - bet)
-    const initialSpinGrid = shiftSlotsGridDown(slotsGrid, createSlotsSpinTopRow(bet))
-    const baseSpinSteps = getRandomSlotsSpinSteps()
-    let completedSpinSteps = 1
-    let stopSequenceStarted = false
-    let finalized = false
-    let stopSequenceStartedAt = 0
-    setSlotsSpinning(true)
-    setSlotsStopping(false)
-    setSlotsSpinAnimationMs(SLOTS_SPIN_BASE_STEP_MS)
-    setSlotsStoppedColumns(Array.from({ length: SLOT_COLUMNS }, () => false))
-    setSlotsSpinTrailRows([])
-    setSlotsSpinFromGrid(slotsGrid)
-    setSlotsSpinDisplayGrid(initialSpinGrid)
-    setSlotsSpinFrame(1)
-    setSlotsResult(null)
+    setBetInputError('')
+
+    const previousGrid = slotsGrid.map((row) => [...row])
+    const finalGrid = createSlotsFinalGrid(bet)
+
     setSlotsBonusBasePayout(0)
     setSlotsBonusBet(0)
     setSlotsBonusGrid(createSlotsBonusGridFromSpin(createInitialSlotsGrid()))
     setSlotsMessage('Reels are spinning...')
-    setBetInputError('')
 
-    if (slotsSpinIntervalRef.current) {
-      window.clearTimeout(slotsSpinIntervalRef.current)
-    }
-    slotsColumnStopTimeoutsRef.current.forEach((timeoutId) => {
-      window.clearTimeout(timeoutId)
-    })
-    slotsColumnStopTimeoutsRef.current = []
+    beginSlotsSpin(previousGrid, finalGrid, () => {
+      const orbCount = countSlotsBonusSymbols(finalGrid)
+      const { totalPayout, winningLines } = calculateSlotsLinePayout(finalGrid, bet)
 
-    const runBaseSpinStep = (gridAtStep: SlotCell[][]) => {
-        const stepDuration = SLOTS_SPIN_BASE_STEP_MS
-        const now = Date.now()
-        const nextStoppedColumns = stopSequenceStarted
-          ? SLOTS_COLUMN_STOP_CUMULATIVE_MS.map((delay) => now - stopSequenceStartedAt >= delay)
-          : Array.from({ length: SLOT_COLUMNS }, () => false)
-        const nextTrailRows = [gridAtStep[2], ...slotsSpinTrailRowsRef.current].slice(
-          0,
-          SLOTS_SPIN_TRAIL_LIMIT,
-        )
-        const nextSpinGrid = shiftSlotsGridDownWithStops(
-          gridAtStep,
-          createSlotsSpinTopRow(bet),
-          nextStoppedColumns,
-        )
+      setSlotsGrid(finalGrid)
 
-        setSlotsStopping(stopSequenceStarted)
-        setSlotsSpinAnimationMs(stepDuration)
-        setSlotsSpinFromGrid(gridAtStep)
-        setSlotsSpinTrailRows(nextTrailRows)
-        setSlotsStoppedColumns(nextStoppedColumns)
-        setSlotsSpinDisplayGrid(nextSpinGrid)
-        setSlotsSpinFrame((currentFrame) => currentFrame + 1)
-        completedSpinSteps += 1
-
-        if (!stopSequenceStarted && completedSpinSteps >= baseSpinSteps) {
-          stopSequenceStarted = true
-          stopSequenceStartedAt = Date.now()
-          setSlotsStopping(true)
+      if (orbCount >= 6) {
+        setSlotsBonusActive(true)
+        setSlotsBonusGrid(createSlotsBonusGridFromSpin(finalGrid))
+        setSlotsBonusRespins(3)
+        setSlotsBonusBasePayout(totalPayout)
+        setSlotsBonusBet(bet)
+        if (totalPayout > 0) {
+          setBankroll((currentBankroll) => currentBankroll + totalPayout)
         }
-
-        if (stopSequenceStarted && nextStoppedColumns.every(Boolean)) {
-          if (finalized) {
-            return
-          }
-
-          finalized = true
-          slotsResolveTimeoutRef.current = window.setTimeout(() => {
-            const settledGrid = (slotsSpinDisplayGridRef.current ?? nextSpinGrid) as SlotCell[][]
-            const finalGrid = resolveSlotsVisibleGrid(settledGrid)
-            const orbCount = countSlotsBonusSymbols(finalGrid)
-            const { totalPayout, winningLines } = calculateSlotsLinePayout(finalGrid, bet)
-
-            setSlotsGrid(finalGrid)
-            setSlotsSpinning(false)
-            setSlotsStopping(false)
-            setSlotsSpinAnimationMs(SLOTS_SPIN_BASE_STEP_MS)
-            setSlotsStoppedColumns(Array.from({ length: SLOT_COLUMNS }, () => false))
-            setSlotsSpinTrailRows([])
-            setSlotsSpinFromGrid(null)
-            setSlotsSpinDisplayGrid(null)
-            setSlotsSpinFrame(0)
-
-            if (orbCount >= 6) {
-              setSlotsBonusActive(true)
-              setSlotsBonusGrid(createSlotsBonusGridFromSpin(finalGrid))
-              setSlotsBonusRespins(3)
-              setSlotsBonusBasePayout(totalPayout)
-              setSlotsBonusBet(bet)
-              if (totalPayout > 0) {
-                setBankroll((currentBankroll) => currentBankroll + totalPayout)
-              }
-              setSlotsMessage(
-                `${orbCount} link orbs trigger the bonus. ${
-                  totalPayout > 0 ? `$${totalPayout} line win banked. ` : ''
-                }Press the bonus button to respin.`,
-              )
-              slotsResolveTimeoutRef.current = null
-              return
-            }
-
-            const result: RoundResult = {
-              message:
-                totalPayout > 0
-                  ? `${winningLines.join('. ')}.`
-                  : 'No line hit this spin.',
-              delta: totalPayout - bet,
-              payout: totalPayout,
-            }
-
-            setSlotsResult(result)
-            setSlotsMessage(
-              totalPayout > 0 ? `${result.message} You win $${totalPayout}.` : 'No hit this time. Spin again.',
-            )
-            if (totalPayout > 0) {
-              setBankroll((currentBankroll) => currentBankroll + result.payout)
-            }
-            applyPlayerDailyDelta(result.delta)
-            applyCasinoDailyDelta(result.delta)
-            applyCasinoGameDailyDelta('slots', result.delta)
-            slotsResolveTimeoutRef.current = null
-          }, stepDuration + SLOTS_SPIN_SETTLE_BUFFER_MS)
-          return
-        }
-
-        slotsSpinIntervalRef.current = window.setTimeout(() => {
-          runBaseSpinStep(nextSpinGrid)
-        }, stepDuration)
+        setSlotsMessage(
+          `${orbCount} link orbs trigger the bonus. ${
+            totalPayout > 0 ? `$${totalPayout} line win banked. ` : ''
+          }Press the bonus button to respin.`,
+        )
+        return
       }
 
-    slotsSpinIntervalRef.current = window.setTimeout(() => {
-      runBaseSpinStep(initialSpinGrid)
-    }, SLOTS_SPIN_BASE_STEP_MS)
+      const result: RoundResult = {
+        message: totalPayout > 0 ? `${winningLines.join('. ')}.` : 'No line hit this spin.',
+        delta: totalPayout - bet,
+        payout: totalPayout,
+      }
+
+      setSlotsResult(result)
+      setSlotsWinningCells(totalPayout > 0 ? getSlotsWinningCells(finalGrid) : null)
+      setSlotsMessage(
+        totalPayout > 0 ? `${result.message} You win $${totalPayout}.` : 'No hit this time. Spin again.',
+      )
+      if (totalPayout > 0) {
+        setBankroll((currentBankroll) => currentBankroll + result.payout)
+      }
+      applyPlayerDailyDelta(result.delta)
+      applyCasinoDailyDelta(result.delta)
+      applyCasinoGameDailyDelta('slots', result.delta)
+    })
   }
 
   const handleOpenSettings = () => {
@@ -3829,6 +3874,8 @@ function App() {
         plinko: [],
         slots: [],
         dice: [],
+        chicken: [],
+        jetstream: [],
       })
     }
     setCasinoStatsResetConfirmOpen(false)
@@ -3876,7 +3923,7 @@ function App() {
     }
 
     if (bet > bankroll) {
-      setBetInputError(`Play amount cannot be more than your score of ${formatPoints(bankroll)}.`)
+      setBetInputError(`Bet cannot be more than your bankroll of ${formatPoints(bankroll)}.`)
       return
     }
 
@@ -3895,41 +3942,302 @@ function App() {
   }
 
   const handleSettlePlinkoDrop = (dropId: string, slotIndex: number) => {
-    setPendingPlinkoDrops((currentDrops) => {
-      const settledDrop = currentDrops.find((drop) => drop.id === dropId)
+    // Settle each ball exactly once. The side effects live OUT here (not inside
+    // a setState updater) so React StrictMode's double-invoked updaters can't
+    // pay out or decrement the live count twice.
+    if (settledPlinkoIdsRef.current.has(dropId)) {
+      return
+    }
 
-      if (!settledDrop) {
-        return currentDrops
-      }
+    const settledDrop = pendingPlinkoDropsRef.current.find((drop) => drop.id === dropId)
+    if (!settledDrop) {
+      return
+    }
 
-      const multiplier = PLINKO_MULTIPLIERS[slotIndex]
-      const payout = roundMoney(settledDrop.bet * multiplier)
-      const net = roundMoney(payout - settledDrop.bet)
-      const round: PlinkoRound = {
-        id: dropId,
-        bet: settledDrop.bet,
-        slotIndex,
-        multiplier,
-        payout,
-        net,
-      }
+    settledPlinkoIdsRef.current.add(dropId)
 
-      setBankroll((currentBankroll) => currentBankroll + payout)
-      applyPlayerDailyDelta(net)
-      applyCasinoDailyDelta(net)
-      applyCasinoGameDailyDelta('plinko', net)
-      setPlinkoResult(round)
-      setPlinkoHistory((currentHistory) => [round, ...currentHistory].slice(0, 4))
-      setPlinkoInFlightDrops((currentCount) => Math.max(0, currentCount - 1))
-      setPlinkoWinStreak((currentStreak) => (payout > settledDrop.bet ? currentStreak + 1 : 0))
-      setPlinkoMessage(
-        `Ball lands in ${multiplier}x. ${
-          net >= 0 ? `You win $${net.toFixed(2)}.` : `You lose $${Math.abs(net).toFixed(2)}.`
-        }`,
+    const multiplier = PLINKO_MULTIPLIERS[slotIndex]
+    const payout = roundMoney(settledDrop.bet * multiplier)
+    const net = roundMoney(payout - settledDrop.bet)
+    const round: PlinkoRound = { id: dropId, bet: settledDrop.bet, slotIndex, multiplier, payout, net }
+
+    setBankroll((currentBankroll) => currentBankroll + payout)
+    applyPlayerDailyDelta(net)
+    applyCasinoDailyDelta(net)
+    applyCasinoGameDailyDelta('plinko', net)
+    setPlinkoResult(round)
+    setPlinkoHistory((currentHistory) => [round, ...currentHistory].slice(0, 4))
+    setPlinkoInFlightDrops((currentCount) => Math.max(0, currentCount - 1))
+    setPlinkoWinStreak((currentStreak) => (payout > settledDrop.bet ? currentStreak + 1 : 0))
+    setPlinkoMessage(
+      `Ball lands in ${multiplier}x. ${
+        net >= 0 ? `You win $${net.toFixed(2)}.` : `You lose $${Math.abs(net).toFixed(2)}.`
+      }`,
+    )
+    setPendingPlinkoDrops((currentDrops) => currentDrops.filter((drop) => drop.id !== dropId))
+  }
+
+  const resetChickenRun = () => {
+    chickenHopLockRef.current = false
+    setChickenStatus('idle')
+    setChickenLane(0)
+    setChickenBet(0)
+    setChickenDeathLane(null)
+    setChickenResult(null)
+    setChickenMessage('Pick a difficulty, set your bet, and start crossing.')
+  }
+
+  const handleOpenChicken = () => {
+    setSelectedGame('chicken')
+    resetRound()
+    resetChickenRun()
+    setBetInput(String(bet))
+    setBetInputError('')
+  }
+
+  const resetJetstreamRound = () => {
+    jetstreamBusyRef.current = false
+    jetstreamBetRef.current = 0
+    setJetstreamBusy(false)
+    jetstreamMultiplierRef.current.value = 1
+    jetstreamRoundRef.current = null
+    jetstreamCarrierRef.current = 0
+    setJetstreamStatus('idle')
+    setJetstreamRound(null)
+    setJetstreamCarrier(0)
+    setJetstreamSplashSegment(null)
+    setJetstreamResult(null)
+    setJetstreamMessage('Set your bet and launch the seaplane.')
+  }
+
+  const handleOpenJetstream = () => {
+    setSelectedGame('jetstream')
+    resetRound()
+    resetJetstreamRound()
+    setBetInput(String(bet))
+    setBetInputError('')
+  }
+
+  // Attempt the hop onto `nextCarrier` (1-based). Survive → land on it; else splash.
+  const attemptJetHop = (nextCarrier: number) => {
+    const activeRound = jetstreamRoundRef.current
+    if (!activeRound || jetstreamBusyRef.current) {
+      return
+    }
+    jetstreamBusyRef.current = true
+    setJetstreamBusy(true)
+
+    if (rollJetHop(activeRound, nextCarrier)) {
+      jetstreamCarrierRef.current = nextCarrier
+      setJetstreamCarrier(nextCarrier)
+      const reached = activeRound.multipliers[nextCarrier - 1]
+      jetstreamMultiplierRef.current.value = reached
+      setJetstreamMessage(
+        nextCarrier >= JET_CARRIERS
+          ? `Final carrier! ${formatJetMultiplier(reached)} — land now.`
+          : `Carrier ${nextCarrier}: ${formatJetMultiplier(reached)}. Land or fly on.`,
       )
+      window.setTimeout(() => {
+        jetstreamBusyRef.current = false
+        setJetstreamBusy(false)
+      }, JET_FLIGHT_MS)
+    } else {
+      jetstreamBusyRef.current = false
+      setJetstreamBusy(false)
+      const stake = jetstreamBetRef.current
+      setJetstreamSplashSegment(nextCarrier)
+      setJetstreamStatus('splashed')
+      const round: JetstreamRound = {
+        id: `jet-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        bet: stake,
+        multiplier: 0,
+        payout: 0,
+        net: roundMoney(-stake),
+        cashed: false,
+      }
+      applyPlayerDailyDelta(round.net)
+      applyCasinoDailyDelta(round.net)
+      applyCasinoGameDailyDelta('jetstream', round.net)
+      setJetstreamResult(round)
+      setJetstreamHistory((current) => [round, ...current].slice(0, 8))
+      setJetstreamMessage(`Splash! The plane went down before carrier ${nextCarrier}. You lose $${stake.toFixed(2)}.`)
+    }
+  }
 
-      return currentDrops.filter((drop) => drop.id !== dropId)
+  const handleLaunchJetstream = () => {
+    if (jetstreamStatus === 'flying') {
+      return
+    }
+    if (!canPlaceBets) {
+      setBetInputError('You are out of points.')
+      return
+    }
+    if (bet > bankroll) {
+      setBetInputError(`Bet cannot be more than your bankroll of ${formatPoints(bankroll)}.`)
+      return
+    }
+
+    const newRound = generateJetRound()
+    setBankroll((currentBankroll) => currentBankroll - bet)
+    jetstreamBusyRef.current = false
+    jetstreamBetRef.current = bet
+    jetstreamMultiplierRef.current.value = 1
+    jetstreamRoundRef.current = newRound
+    jetstreamCarrierRef.current = 0
+    setJetstreamBusy(false)
+    setJetstreamBet(bet)
+    setJetstreamRound(newRound)
+    setJetstreamCarrier(0)
+    setJetstreamSplashSegment(null)
+    setJetstreamResult(null)
+    setJetstreamStatus('flying')
+    setBetInputError('')
+    setJetstreamMessage('Taking off…')
+    // launch straight into the first hop (after the reset commits)
+    window.setTimeout(() => attemptJetHop(1), 30)
+  }
+
+  const handleJetFlyOn = () => {
+    if (jetstreamBusyRef.current || jetstreamCarrierRef.current >= JET_CARRIERS) {
+      return
+    }
+    attemptJetHop(jetstreamCarrierRef.current + 1)
+  }
+
+  const handleJetLand = () => {
+    const activeRound = jetstreamRoundRef.current
+    const landedCarrier = jetstreamCarrierRef.current
+    if (jetstreamBusyRef.current || landedCarrier < 1 || !activeRound || jetstreamStatus !== 'flying') {
+      return
+    }
+    const stake = jetstreamBetRef.current
+    const multiplier = activeRound.multipliers[landedCarrier - 1]
+    const payout = roundMoney(stake * multiplier)
+    const net = roundMoney(payout - stake)
+    const round: JetstreamRound = {
+      id: `jet-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      bet: stake,
+      multiplier,
+      payout,
+      net,
+      cashed: true,
+    }
+    setBankroll((currentBankroll) => currentBankroll + payout)
+    setJetstreamStatus('cashed')
+    applyPlayerDailyDelta(net)
+    applyCasinoDailyDelta(net)
+    applyCasinoGameDailyDelta('jetstream', net)
+    setJetstreamResult(round)
+    setJetstreamHistory((current) => [round, ...current].slice(0, 8))
+    setJetstreamMessage(`Landed at ${formatJetMultiplier(multiplier)} for ${formatPoints(payout)} (+$${net.toFixed(2)}).`)
+  }
+
+  const handleSelectChickenDifficulty = (difficulty: ChickenDifficulty) => {
+    if (chickenStatus === 'playing') {
+      return
+    }
+    setChickenDifficulty(difficulty)
+    resetChickenRun()
+  }
+
+  const handleStartChickenRun = () => {
+    if (chickenStatus === 'playing') {
+      return
+    }
+    if (!canPlaceBets) {
+      setBetInputError('You are out of points.')
+      return
+    }
+    if (bet > bankroll) {
+      setBetInputError(`Bet cannot be more than your bankroll of ${formatPoints(bankroll)}.`)
+      return
+    }
+
+    setBankroll((currentBankroll) => currentBankroll - bet)
+    chickenHopLockRef.current = false
+    setChickenBet(bet)
+    setChickenLane(0)
+    setChickenDeathLane(null)
+    setChickenResult(null)
+    setChickenStatus('playing')
+    setChickenMessage('Tap Cross to hop into traffic — cash out any time.')
+    setBetInputError('')
+  }
+
+  const settleChickenRound = (round: ChickenRound) => {
+    applyPlayerDailyDelta(round.net)
+    applyCasinoDailyDelta(round.net)
+    applyCasinoGameDailyDelta('chicken', round.net)
+    setChickenResult(round)
+    setChickenHistory((currentHistory) => [round, ...currentHistory].slice(0, 4))
+  }
+
+  const handleChickenStep = () => {
+    if (chickenStatus !== 'playing' || chickenHopLockRef.current) {
+      return
+    }
+
+    const nextLane = chickenLane + 1
+    if (nextLane > CHICKEN_LANES) {
+      return
+    }
+
+    const config = getChickenConfig(chickenDifficulty)
+    chickenHopLockRef.current = true
+
+    if (rollChickenHop(config, nextLane - 1)) {
+      setChickenLane(nextLane)
+      const multiplier = config.multipliers[nextLane - 1]
+      setChickenMessage(
+        nextLane >= CHICKEN_LANES
+          ? `Final lane! ${formatChickenMultiplier(multiplier)} — cash out now.`
+          : `Lane ${nextLane}: ${formatChickenMultiplier(multiplier)}. Cash out or push on.`,
+      )
+      window.setTimeout(() => {
+        chickenHopLockRef.current = false
+      }, 380)
+    } else {
+      setChickenDeathLane(nextLane)
+      setChickenStatus('dead')
+      const round: ChickenRound = {
+        id: `chicken-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        bet: chickenBet,
+        difficulty: chickenDifficulty,
+        lane: nextLane,
+        multiplier: 0,
+        payout: 0,
+        net: roundMoney(-chickenBet),
+        cashed: false,
+      }
+      settleChickenRound(round)
+      setChickenMessage(`Splat! A car got you on lane ${nextLane}. You lose $${chickenBet.toFixed(2)}.`)
+    }
+  }
+
+  const handleChickenCashout = () => {
+    if (chickenStatus !== 'playing' || chickenLane < 1) {
+      return
+    }
+
+    const config = getChickenConfig(chickenDifficulty)
+    const multiplier = config.multipliers[chickenLane - 1]
+    const payout = roundMoney(chickenBet * multiplier)
+    const net = roundMoney(payout - chickenBet)
+
+    setBankroll((currentBankroll) => currentBankroll + payout)
+    chickenHopLockRef.current = false
+    setChickenStatus('cashed')
+    settleChickenRound({
+      id: `chicken-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      bet: chickenBet,
+      difficulty: chickenDifficulty,
+      lane: chickenLane,
+      multiplier,
+      payout,
+      net,
+      cashed: true,
     })
+    setChickenMessage(`Cashed out at ${formatChickenMultiplier(multiplier)} for ${formatPoints(payout)} (+$${net.toFixed(2)}).`)
   }
 
   const handleChoosePokerMode = (mode: 'join' | 'create') => {
@@ -4062,7 +4370,7 @@ function App() {
     }
 
     if (parsedBuyIn > bankroll) {
-      setBetInputError(`Entry points cannot be more than your score of ${formatPoints(bankroll)}.`)
+      setBetInputError(`Buy-in cannot be more than your bankroll of ${formatPoints(bankroll)}.`)
       return
     }
 
@@ -4083,7 +4391,7 @@ function App() {
     const parsedSmallBlind = Number(pokerSmallBlindInput)
 
     if (!Number.isFinite(parsedSmallBlind) || parsedSmallBlind <= 0) {
-      setBetInputError('Small marker must be greater than 0 pts.')
+      setBetInputError('Small blind must be greater than $0.')
       return
     }
 
@@ -4732,7 +5040,7 @@ function App() {
     }
 
     if (!canPlaceBets || bankroll < MIN_BET) {
-      setBetInputError('You do not have enough score to start another play.')
+      setBetInputError('Your bankroll cannot cover another bet.')
       return
     }
 
@@ -4746,7 +5054,7 @@ function App() {
       const nextTotal = currentBets.reduce((sum, entry) => sum + entry.amount, 0) + MIN_BET
 
       if (nextTotal > bankroll) {
-        setBetInputError(`Total wheel picks cannot be more than your score of ${formatPoints(bankroll)}.`)
+        setBetInputError(`Total bets cannot be more than your bankroll of ${formatPoints(bankroll)}.`)
         return currentBets
       }
 
@@ -4787,7 +5095,7 @@ function App() {
     }
 
     if (rouletteTotalBet > bankroll) {
-      setBetInputError(`Total wheel picks cannot be more than your score of ${formatPoints(bankroll)}.`)
+      setBetInputError(`Total bets cannot be more than your bankroll of ${formatPoints(bankroll)}.`)
       return
     }
 
@@ -4957,7 +5265,7 @@ function App() {
     }
 
     if (bet > bankroll) {
-      setBetInputError(`Play amount cannot be more than your score of ${formatPoints(bankroll)}.`)
+      setBetInputError(`Bet cannot be more than your bankroll of ${formatPoints(bankroll)}.`)
       return
     }
 
@@ -4999,58 +5307,57 @@ function App() {
     const isPush = currentValue === nextValue
     const didWin = guess === 'higher' ? nextValue > currentValue : nextValue < currentValue
 
+    // Reveal: the next card mounts and slides in from the right (CSS keyframe on
+    // .hilo-card--overlay), covering the back. Once it has settled we commit it
+    // as the new current card. One timer, so the reveal always plays.
     setHiLoGuess(guess)
     setHiLoNextCard(nextCard)
     setHiLoResolving(true)
-    setHiLoSliding(false)
+    setHiLoSliding(true)
 
     hiLoResolveTimeoutRef.current = window.setTimeout(() => {
-      setHiLoSliding(true)
+      const nextUpcomingCard =
+        remainingDeck.length > 0 ? drawRandomCard(remainingDeck).drawnCard : null
 
-      hiLoResolveTimeoutRef.current = window.setTimeout(() => {
-        const nextUpcomingCard =
-          remainingDeck.length > 0 ? drawRandomCard(remainingDeck).drawnCard : null
+      setHiLoCurrentCard(nextCard)
+      setHiLoUpcomingCard(nextUpcomingCard)
+      setHiLoNextCard(null)
+      setHiLoDeck(remainingDeck)
+      setHiLoResolving(false)
+      setHiLoSliding(false)
 
-        setHiLoCurrentCard(nextCard)
-        setHiLoUpcomingCard(nextUpcomingCard)
-        setHiLoNextCard(null)
-        setHiLoDeck(remainingDeck)
-        setHiLoResolving(false)
-        setHiLoSliding(false)
-
-        if (isPush) {
-          setHiLoMessage(`Push. Multiplier stays at x${hiLoMultiplier.toFixed(2)}. Keep going.`)
-          hiLoResolveTimeoutRef.current = null
-          return
-        }
-
-        if (didWin) {
-          const nextStreak = hiLoStreak + 1
-          const nextMultiplier = Number((hiLoMultiplier * stepMultiplier).toFixed(2))
-          const nextCashOut = Math.round(bet * nextMultiplier)
-          setHiLoStreak(nextStreak)
-          setHiLoMultiplier(nextMultiplier)
-          setHiLoMessage(
-            `Correct. Multiplier is now x${nextMultiplier.toFixed(2)}. Cash out for $${nextCashOut} or keep going.`,
-          )
-          hiLoResolveTimeoutRef.current = null
-          return
-        }
-
-        const result: RoundResult = {
-          message: `${nextCard.rank}${nextCard.suit} is not ${guess}. You lose.`,
-          delta: -bet,
-          payout: 0,
-        }
-
-        setHiLoResult(result)
-        setHiLoMessage(result.message)
-        applyPlayerDailyDelta(result.delta)
-        applyCasinoDailyDelta(result.delta)
-        applyCasinoGameDailyDelta('hilo', result.delta)
+      if (isPush) {
+        setHiLoMessage(`Push. Multiplier stays at x${hiLoMultiplier.toFixed(2)}. Keep going.`)
         hiLoResolveTimeoutRef.current = null
-      }, 420)
-    }, 700)
+        return
+      }
+
+      if (didWin) {
+        const nextStreak = hiLoStreak + 1
+        const nextMultiplier = Number((hiLoMultiplier * stepMultiplier).toFixed(2))
+        const nextCashOut = Math.round(bet * nextMultiplier)
+        setHiLoStreak(nextStreak)
+        setHiLoMultiplier(nextMultiplier)
+        setHiLoMessage(
+          `Correct. Multiplier is now x${nextMultiplier.toFixed(2)}. Cash out for $${nextCashOut} or keep going.`,
+        )
+        hiLoResolveTimeoutRef.current = null
+        return
+      }
+
+      const result: RoundResult = {
+        message: `${nextCard.rank}${nextCard.suit} is not ${guess}. You lose.`,
+        delta: -bet,
+        payout: 0,
+      }
+
+      setHiLoResult(result)
+      setHiLoMessage(result.message)
+      applyPlayerDailyDelta(result.delta)
+      applyCasinoDailyDelta(result.delta)
+      applyCasinoGameDailyDelta('hilo', result.delta)
+      hiLoResolveTimeoutRef.current = null
+    }, 880)
   }
 
   const handleCashOutHiLo = () => {
@@ -5085,7 +5392,7 @@ function App() {
     }
 
     if (bet > bankroll) {
-      setBetInputError(`Play amount cannot be more than your score of ${formatPoints(bankroll)}.`)
+      setBetInputError(`Bet cannot be more than your bankroll of ${formatPoints(bankroll)}.`)
       return
     }
 
@@ -5116,7 +5423,7 @@ function App() {
         tile.isMine || tile.id === tileId ? { ...tile, revealed: true } : tile,
       )
       const result: RoundResult = {
-        message: 'Hazard hit. The whole play is gone.',
+        message: 'Mine hit. The whole bet is gone.',
         delta: -bet,
         payout: 0,
       }
@@ -5124,7 +5431,7 @@ function App() {
       setMinesBoard(nextBoard)
       setMinesResult(result)
       setMinesRoundActive(false)
-      setMinesMessage('Hazard hit. Start another round to try again.')
+      setMinesMessage('Mine hit. Start another round to try again.')
       applyPlayerDailyDelta(result.delta)
       applyCasinoDailyDelta(result.delta)
       applyCasinoGameDailyDelta('mines', result.delta)
@@ -5229,7 +5536,7 @@ function App() {
     }
 
     if (bet > bankroll) {
-      setBetInputError(`Play amount cannot be more than your score of ${formatPoints(bankroll)}.`)
+      setBetInputError(`Bet cannot be more than your bankroll of ${formatPoints(bankroll)}.`)
       return
     }
 
@@ -5323,19 +5630,20 @@ function App() {
   return (
     <main className={devMode ? 'dev-mode' : undefined}>
       <div className="app-stage">
+          {selectedGame !== 'lobby' ? (
           <section className="hero">
             <div className="hero__glow hero__glow--left" />
             <div className="hero__glow hero__glow--right" />
             <div className="hero__inner">
               <header className="hero__header">
                 <div>
-                  <p className="eyebrow">Lumex Arcade</p>
+                  <p className="eyebrow">UES Underground Casino</p>
                 </div>
               </header>
             </div>
             <div className="balance-pill">
               <div className="balance-pill__inner">
-                <span className="balance-pill__label">Score</span>
+                <span className="balance-pill__label">Bankroll</span>
                 <div className="balance-pill__value">
                   {devMode ? (
                     <button
@@ -5349,7 +5657,7 @@ function App() {
                     </button>
                   ) : null}
                   <strong>
-                    {formatPoints(bankroll)}
+                    <AnimatedMoney value={bankroll} />
                     {devMode ? <span className="balance-pill__mode"> Dev Mode</span> : null}
                   </strong>
                   {devMode ? (
@@ -5378,65 +5686,139 @@ function App() {
               </div>
             </div>
           </section>
+          ) : null}
 
-          <div className={`shell${selectedGame === 'lobby' ? ' shell--with-sidepanels' : ''}`}>
+          <div className={`shell shell--${selectedGame}`}>
             {selectedGame === 'lobby' ? (
-              <aside className="leaderboard-panel" aria-label="Leaderboard">
-                <p className="bet-panel__label">Leaderboard</p>
-                <h3>Top Scores</h3>
-                <div className="leaderboard-list">
-                  {leaderboardPlayers.map((profile, index) => (
-                    <article className="leaderboard-row" key={profile.id}>
-                      <span className="leaderboard-row__rank">{index + 1}</span>
-                      <strong>{profile.name || 'Unnamed player'}</strong>
-                      <span>{formatPoints(profile.bankroll)}</span>
-                    </article>
-                  ))}
-                  <article className="leaderboard-row leaderboard-row--you">
-                    <span className="leaderboard-row__rank">You</span>
-                    <strong>{playerProfile.name || 'Unnamed player'}</strong>
-                    <span>{formatPoints(bankroll)}</span>
+              <div className="home" aria-label="Casino floor">
+                <header className="home__marquee">
+                  <p className="home__kicker">✦&nbsp;&nbsp;Fake-money floor&nbsp;&nbsp;✦</p>
+                  <h1 className="home__brand">UES Underground Casino</h1>
+                  <p className="home__tag">Eleven tables, one bankroll — play the house with friends.</p>
+                </header>
+
+                <section className="home__cage" aria-label="Bankroll and rewards">
+                  <article className="home__panel home__daily">
+                    <p className="home__panel-label">Daily Bonus</p>
+                    <div className="home__streak">
+                      <span>Streak</span>
+                      <strong>
+                        {activeDailyRewardStreak} day{activeDailyRewardStreak === 1 ? '' : 's'}
+                      </strong>
+                    </div>
+                    <div className="home__daytrack">
+                      {dailyRewardDays.map((entry) => (
+                        <span
+                          key={entry.dayNumber}
+                          className={`home__day${entry.current ? ' home__day--current' : ''}${
+                            entry.claimed ? ' home__day--claimed' : ''
+                          }`}
+                          title={`Day ${entry.dayNumber} · ${formatPoints(entry.reward)}`}
+                        >
+                          {entry.dayNumber}
+                        </span>
+                      ))}
+                    </div>
+                    {canClaimDailyReward ? (
+                      <button type="button" className="home__collect" onClick={handleClaimDailyReward}>
+                        Collect {formatPoints(nextDailyRewardAmount)}
+                      </button>
+                    ) : (
+                      <p className="home__panel-note">Collected — back tomorrow.</p>
+                    )}
                   </article>
-                </div>
-              </aside>
-            ) : null}
-            {selectedGame === 'lobby' ? (
-              <aside className="daily-reward-panel" aria-label="Daily bonus">
-                <p className="bet-panel__label">Daily Bonus</p>
-                <h3>{canClaimDailyReward ? 'Ready to collect' : 'Collected today'}</h3>
-                <div className="daily-reward-panel__streak">
-                  <span>Streak</span>
-                  <strong>{activeDailyRewardStreak} day{activeDailyRewardStreak === 1 ? '' : 's'}</strong>
-                </div>
-                {canClaimDailyReward ? (
-                  <button
-                    type="button"
-                    className="action-button action-button--primary daily-reward-panel__button"
-                    onClick={handleClaimDailyReward}
-                  >
-                    {`Collect ${formatPoints(nextDailyRewardAmount)}`}
-                  </button>
-                ) : null}
-                <div className="daily-reward-list">
-                  {dailyRewardDays.map((entry) => (
-                    <article
-                      className={`daily-reward-row${entry.current ? ' daily-reward-row--current' : ''}${
-                        entry.claimed ? ' daily-reward-row--claimed' : ''
-                      }`}
-                      key={entry.dayNumber}
-                    >
-                      <span>
-                        Day {entry.dayNumber}
-                        {entry.claimed ? <em className="daily-reward-row__check">Claimed</em> : null}
-                      </span>
-                      <strong>{formatPoints(entry.reward)}</strong>
-                    </article>
-                  ))}
-                </div>
-              </aside>
-            ) : null}
+
+                  <article className="home__bankroll">
+                    <p className="home__bankroll-label">Your Bankroll</p>
+                    <div className="home__bankroll-value">
+                      {devMode ? (
+                        <button
+                          type="button"
+                          className="home__dev"
+                          onClick={() => handleAdjustDevBankroll(-100)}
+                          aria-label="Remove 100"
+                        >
+                          –
+                        </button>
+                      ) : null}
+                      <strong>
+                        <AnimatedMoney value={bankroll} />
+                      </strong>
+                      {devMode ? (
+                        <button
+                          type="button"
+                          className="home__dev"
+                          onClick={() => handleAdjustDevBankroll(100)}
+                          aria-label="Add 100"
+                        >
+                          +
+                        </button>
+                      ) : null}
+                    </div>
+                    {devMode ? <p className="home__bankroll-sub">Dev mode active</p> : null}
+                  </article>
+
+                  <article className="home__panel home__rollers">
+                    <p className="home__panel-label">High Rollers</p>
+                    <ol className="home__standings">
+                      {leaderboardPlayers.slice(0, 4).map((profile, index) => (
+                        <li key={profile.id}>
+                          <span className="home__rank">{index + 1}</span>
+                          <span className="home__name">{profile.name || 'Unnamed'}</span>
+                          <span className="home__chips">{formatPoints(profile.bankroll)}</span>
+                        </li>
+                      ))}
+                      <li className="home__you">
+                        <span className="home__rank">You</span>
+                        <span className="home__name">{playerProfile.name || 'Unnamed'}</span>
+                        <span className="home__chips">{formatPoints(bankroll)}</span>
+                      </li>
+                    </ol>
+                  </article>
+                </section>
+
+                <section className="home__floor" aria-label="Games">
+                  <div className="home__floor-head">
+                    <h2>Choose your table</h2>
+                    <span className="home__floor-rule" />
+                    <span className="home__floor-count">
+                      {devMode ? '11 games + tools' : '11 games'}
+                    </span>
+                  </div>
+                  <div className="home__grid">
+                    {[
+                      { cls: 'blackjack', wing: 'parlor', tag: 'Beat the dealer', name: 'Blackjack', onClick: handleOpenBlackjack },
+                      { cls: 'roulette', wing: 'parlor', tag: 'Red or black', name: 'Roulette', onClick: handleOpenRoulette },
+                      { cls: 'hilo', wing: 'parlor', tag: 'Higher or lower', name: 'Hi-Lo', onClick: handleOpenHiLo },
+                      { cls: 'poker', wing: 'parlor', tag: 'Live table', name: 'Poker', onClick: handleOpenPoker },
+                      { cls: 'dice', wing: 'parlor', tag: 'Roll the bones', name: 'Dice', onClick: handleOpenDice },
+                      { cls: 'mines', wing: 'neon', tag: 'Dodge the mines', name: 'Mines', onClick: handleOpenMines },
+                      { cls: 'slots', wing: 'neon', tag: 'Triple jackpot', name: 'Slots', onClick: handleOpenSlots },
+                      { cls: 'plinko', wing: 'neon', tag: 'Neon arcade', name: 'Plinko', onClick: handleOpenPlinko },
+                      { cls: 'chicken', wing: 'neon', tag: 'Beat the traffic', name: 'Chicken Cross', onClick: handleOpenChicken },
+                      { cls: 'jetstream', wing: 'neon', tag: 'Cash out before it flies', name: 'Jetstream', onClick: handleOpenJetstream },
+                      { cls: 'options', wing: 'muted', tag: 'Profile & stats', name: 'Options', onClick: handleOpenOptions },
+                      ...(devMode
+                        ? [{ cls: 'settings', wing: 'muted', tag: 'Developer tools', name: 'Dev Options', onClick: handleOpenSettings }]
+                        : []),
+                    ].map((game) => (
+                      <button
+                        key={game.cls}
+                        type="button"
+                        className={`home-tile home-tile--${game.cls} home-tile--${game.wing}`}
+                        onClick={game.onClick}
+                      >
+                        <span className="home-tile__tag">{game.tag}</span>
+                        <strong className="home-tile__name">{game.name}</strong>
+                        <span className="home-tile__go" aria-hidden="true">Play →</span>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              </div>
+            ) : (
             <section
-              className={`games-panel${selectedGame === 'poker' ? ' games-panel--poker' : ''}`}
+              className={`games-panel games-panel--${selectedGame}`}
               aria-label="Games"
             >
           <div className="games-panel__header">
@@ -5444,23 +5826,27 @@ function App() {
               <p className="eyebrow">Games</p>
               <h2>
                 {selectedGame === 'blackjack'
-                  ? 'Twenty-One'
+                  ? 'Blackjack'
                   : selectedGame === 'options'
                     ? 'Options'
                   : selectedGame === 'roulette'
-                    ? 'Color Wheel'
+                    ? 'Roulette'
                     : selectedGame === 'poker'
-                      ? 'Table Match'
+                      ? 'Poker'
                     : selectedGame === 'mines'
-                      ? 'Safe Steps'
+                      ? 'Mines'
                     : selectedGame === 'hilo'
-                      ? 'Up Down'
+                      ? 'Hi-Lo'
                     : selectedGame === 'dice'
-                        ? 'Dice Path'
+                        ? 'Dice'
                       : selectedGame === 'slots'
-                        ? 'Symbol Spin'
+                        ? 'Slots'
                       : selectedGame === 'plinko'
-                        ? 'Peg Drop'
+                        ? 'Plinko'
+                      : selectedGame === 'chicken'
+                        ? 'Chicken Cross'
+                      : selectedGame === 'jetstream'
+                        ? 'Jetstream'
                       : selectedGame === 'settings'
                         ? 'Dev Options'
                         : selectedGame === 'settings-players'
@@ -5474,135 +5860,16 @@ function App() {
                     : 'Choose your game'}
               </h2>
             </div>
-            {selectedGame !== 'lobby' ? (
-              <button
-                type="button"
-                className="status-badge status-badge--button"
-                onClick={handleBackToGames}
-              >
-                Back to games
-              </button>
-            ) : (
-              <span className="status-badge">Pick a challenge</span>
-            )}
+            <button
+              type="button"
+              className="status-badge status-badge--button"
+              onClick={handleBackToGames}
+            >
+              Back to games
+            </button>
           </div>
 
-          {selectedGame === 'lobby' ? (
-            <div className="game-grid">
-              <button
-                type="button"
-                className="game-card game-card--active"
-                onClick={handleOpenBlackjack}
-              >
-                <span className="game-card__eyebrow">Target 21</span>
-                <strong>Twenty-One</strong>
-                <span className="game-card__copy">
-                  Build a hand toward 21, choose hit or stand, and try to finish closer than the lead hand.
-                </span>
-              </button>
-              <button
-                type="button"
-                className="game-card game-card--roulette"
-                onClick={handleOpenRoulette}
-              >
-                <span className="game-card__eyebrow">Color Track</span>
-                <strong>Color Wheel</strong>
-                <span className="game-card__copy">
-                  Pick colors, ranges, or exact spaces, then watch the wheel settle on a target.
-                </span>
-              </button>
-              <button
-                type="button"
-                className="game-card game-card--hilo"
-                onClick={handleOpenHiLo}
-              >
-                <span className="game-card__eyebrow">Prediction Run</span>
-                <strong>Up Down</strong>
-                <span className="game-card__copy">
-                  Predict whether the next shape is higher or lower, then bank your run before it breaks.
-                </span>
-              </button>
-              <button
-                type="button"
-                className="game-card game-card--mines"
-                onClick={handleOpenMines}
-              >
-                <span className="game-card__eyebrow">Safe Path</span>
-                <strong>Safe Steps</strong>
-                <span className="game-card__copy">
-                  Open safe tiles on the 5x5 board, grow your score multiplier, and avoid hidden hazards.
-                </span>
-              </button>
-              <button
-                type="button"
-                className="game-card game-card--poker"
-                onClick={handleOpenPoker}
-              >
-                <span className="game-card__eyebrow">Shared Match</span>
-                <strong>Table Match</strong>
-                <span className="game-card__copy">
-                  Create a room or join by code and take turns building the best shared hand with friends.
-                </span>
-              </button>
-              <button
-                type="button"
-                className="game-card game-card--dice"
-                onClick={handleOpenDice}
-              >
-                <span className="game-card__eyebrow">20 Dice Run</span>
-                <strong>Dice Path</strong>
-                <span className="game-card__copy">
-                  Set a target from 20 to 120, pick over or under, and roll all 20 dice at once.
-                </span>
-              </button>
-              <button
-                type="button"
-                className="game-card game-card--slots"
-                onClick={handleOpenSlots}
-              >
-                <span className="game-card__eyebrow">Orb Bonus</span>
-                <strong>Symbol Spin</strong>
-                <span className="game-card__copy">
-                  Spin the 5-reel board, match symbol lines, and trigger the orb bonus round.
-                </span>
-              </button>
-              <button
-                type="button"
-                className="game-card game-card--plinko"
-                onClick={handleOpenPlinko}
-              >
-                <span className="game-card__eyebrow">Peg Drop</span>
-                <strong>Peg Drop</strong>
-                <span className="game-card__copy">
-                  Send tokens through the peg board and aim for the stronger multiplier lanes at the edges.
-                </span>
-              </button>
-              <button
-                type="button"
-                className="game-card game-card--options"
-                onClick={handleOpenOptions}
-              >
-                <span className="game-card__eyebrow">Profile & Stats</span>
-                <strong>Options</strong>
-                <span className="game-card__copy">
-                  Manage your player profile, start-screen preferences, and personal statistics.
-                </span>
-              </button>
-              {devMode ? (
-                <button
-                  type="button"
-                  className="game-card game-card--settings"
-                  onClick={handleOpenSettings}
-                >
-                  <span className="game-card__eyebrow">Developer Tools</span>
-                  <strong>Dev Options</strong>
-                  <span className="game-card__copy">
-                    Open internal tools for player controls, statistics, and debugging features.
-                  </span>
-                </button>
-              ) : null}
-            </div>
-          ) : selectedGame === 'options' ? (
+          {selectedGame === 'options' ? (
             <div className="settings-room">
               <div className="roulette-stage settings-stage">
                 <div className="roulette-stage__header">
@@ -5681,7 +5948,7 @@ function App() {
                           <strong>{playerProfile.id}</strong>
                         </div>
                         <div className="roulette-summary__row">
-                          <span>Score</span>
+                          <span>Bankroll</span>
                           <strong>{formatPoints(bankroll)}</strong>
                         </div>
                       </div>
@@ -5703,7 +5970,7 @@ function App() {
                             ? formatSignedPoints(lifetimePlayerProfit)
                             : lifetimePlayerProfit < 0
                               ? formatSignedPoints(lifetimePlayerProfit)
-                              : '0 pts'}
+                              : '$0'}
                         </strong>
                       </div>
                       <p className="roulette-stage__status options-stats__note">
@@ -5829,7 +6096,7 @@ function App() {
                           <strong>{selectedSettingsPlayer.id}</strong>
                         </div>
                         <div className="roulette-summary__row">
-                          <span>Score</span>
+                          <span>Bankroll</span>
                           <strong>{formatPoints(selectedSettingsPlayer.bankroll)}</strong>
                         </div>
                       </div>
@@ -5865,7 +6132,7 @@ function App() {
                         </label>
                       </div>
 
-                      <p className="bet-panel__label settings-player-detail__label">Score</p>
+                      <p className="bet-panel__label settings-player-detail__label">Bankroll</p>
                       <div className="bet-entry">
                         <div className="bet-entry__form">
                           <input
@@ -5877,7 +6144,7 @@ function App() {
                               setSettingsPlayerDetailBankroll(event.target.value)
                               setSettingsPlayerDetailError('')
                             }}
-                            placeholder="Set score"
+                            placeholder="Set bankroll"
                           />
                         </div>
                       </div>
@@ -6182,14 +6449,14 @@ function App() {
                   <span>
                     {diceResult
                       ? `Net ${formatSignedPoints(diceResult.delta)}`
-                      : `${Math.round(diceWinChance * 1000) / 10}% to score at x${diceMultiplier.toFixed(2)}`}
+                      : `${Math.min(99.9, Math.round(diceWinChance * 1000) / 10)}% to score at x${diceMultiplier.toFixed(2)}`}
                   </span>
                 </div>
               </div>
 
               <div className="roulette-panel">
                 <div className="roulette-panel__card">
-                  <p className="bet-panel__label">Dice Path</p>
+                  <p className="bet-panel__label">Dice</p>
                   <h3>{diceRolling ? 'Rolling all 20 dice' : 'Set the line and roll'}</h3>
                   <div className="bet-entry roulette-panel__bet-entry">
                     <div className="bet-entry__form">
@@ -6216,7 +6483,7 @@ function App() {
                   {betInputError ? <p className="bet-panel__error">{betInputError}</p> : null}
                   <div className="roulette-summary">
                     <div className="roulette-summary__row">
-                      <span>Current play</span>
+                      <span>Current bet</span>
                       <strong>{formatPoints(bet)}</strong>
                     </div>
                     <div className="roulette-summary__row">
@@ -6252,7 +6519,7 @@ function App() {
               <div className="slots-stage">
                 <div className="roulette-stage__header">
                   <div>
-                    <p className="bet-panel__label">Violet Loop</p>
+                    <p className="bet-panel__label">Lucky Reels</p>
                     <p className="roulette-stage__status">
                       {slotsMessage}
                     </p>
@@ -6281,53 +6548,95 @@ function App() {
                 <div className="slots-machine-wrap">
                 <div className="slots-machine">
                   <div className="slots-machine__top">
-                    {slotsBonusActive ? 'Orb Bonus' : 'Lumex Arcade Symbol Spin'}
+                    {slotsBonusActive ? 'Jackpot Bonus' : 'UES Underground Casino Slots'}
                   </div>
                   <div className="slots-machine__window">
-                    {slotsDisplayedColumns.map((columnCells, columnIndex) => (
-                      <div className="slots-machine__column" key={columnIndex}>
-                        {slotsSpinning && !slotsStoppedColumns[columnIndex] ? (
-                          <div
-                            className="slots-machine__column-scroll"
-                            key={`${columnIndex}-${slotsSpinFrame}`}
-                            style={
-                              {
-                                animationDuration: `${slotsSpinAnimationMs}ms`,
-                              }
-                            }
-                            >
-                            <div className="slots-machine__column-track">
-                              {getSlotsColumnTrackCells(columnIndex, columnCells).map((cell, rowIndex) => {
-                                const displayCell = cell ?? getSlotsFallbackCell(columnIndex, rowIndex)
+                    {slotsColumns.map((column, columnIndex) => {
+                      const columnStopped = slotsStoppedColumns[columnIndex]
+                      const columnSpinning = slotsSpinning && !columnStopped
+
+                      if (slotsBonusActive) {
+                        return (
+                          <div className="slots-machine__column" key={columnIndex}>
+                            <div className="slots-machine__column-face">
+                              {column.final.map((cell, rowIndex) => {
+                                const heldCell = column.previous[rowIndex]
+                                const isRespinning = columnSpinning && !heldCell
+                                const showCell = columnSpinning ? heldCell : cell
+                                const justLanded =
+                                  slotsSpinning && columnStopped && !heldCell && Boolean(cell)
 
                                 return (
-                                <div className={getSlotsCellClassName(displayCell)} key={`track-${columnIndex}-${rowIndex}`}>
-                                  {renderSlotsCellContent(displayCell)}
-                                </div>
+                                  <div
+                                    className={`${getSlotsCellClassName(showCell ?? null)}${
+                                      isRespinning ? ' slots-machine__reel--respin' : ''
+                                    }${justLanded ? ' slots-machine__reel--landed' : ''}`}
+                                    key={`bonus-${columnIndex}-${rowIndex}`}
+                                  >
+                                    {isRespinning ? (
+                                      <span className="slots-machine__respin-glow" aria-hidden="true" />
+                                    ) : (
+                                      renderSlotsCellContent(showCell ?? null)
+                                    )}
+                                  </div>
                                 )
                               })}
                             </div>
                           </div>
-                        ) : (
-                          <div className="slots-machine__column-face">
-                            {columnCells.to.map((cell, rowIndex) => {
-                              const displayCell = cell ?? getSlotsFallbackCell(columnIndex, rowIndex)
+                        )
+                      }
 
-                              return (
-                              <div className={getSlotsCellClassName(displayCell)} key={`rest-${columnIndex}-${rowIndex}`}>
-                                {renderSlotsCellContent(displayCell)}
+                      return (
+                        <div className="slots-machine__column" key={columnIndex}>
+                          {columnSpinning ? (
+                            <div className="slots-reel" key={`loop-${slotsSpinTarget?.token}-${columnIndex}`}>
+                              <div
+                                className="slots-reel__strip slots-reel__strip--loop"
+                                style={{ animationDelay: `${columnIndex * -73}ms` }}
+                              >
+                                {[...column.filler, ...column.filler].map((cell, cellIndex) => (
+                                  <div
+                                    className="slots-machine__reel slots-machine__reel--blur"
+                                    key={`loop-${columnIndex}-${cellIndex}`}
+                                  >
+                                    {renderSlotsCellContent(cell)}
+                                  </div>
+                                ))}
                               </div>
-                              )
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    ))}
+                            </div>
+                          ) : slotsSpinning ? (
+                            <div className="slots-reel" key={`settle-${slotsSpinTarget?.token}-${columnIndex}`}>
+                              <div className="slots-reel__strip slots-reel__strip--settle">
+                                {[...column.final, ...column.filler.slice(0, 3)].map((cell, cellIndex) => (
+                                  <div
+                                    className={getSlotsCellClassName(cell ?? null)}
+                                    key={`settle-${columnIndex}-${cellIndex}`}
+                                  >
+                                    {renderSlotsCellContent(cell ?? null)}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="slots-machine__column-face">
+                              {column.final.map((cell, rowIndex) => (
+                                <div
+                                  className={getSlotsCellClassName(cell ?? null, rowIndex, columnIndex)}
+                                  key={`rest-${columnIndex}-${rowIndex}`}
+                                >
+                                  {renderSlotsCellContent(cell ?? null)}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
                   </div>
                   {slotsBonusActive ? (
                     <div className="slots-machine__bonus-banner">
                       <strong>{slotsBonusRespins} Free Bonus Respins</strong>
-                      <span>No extra play amount is needed while the bonus is active.</span>
+                      <span>No extra bet is needed while the bonus is active.</span>
                     </div>
                   ) : null}
                   <div className="slots-machine__footer">
@@ -6359,7 +6668,7 @@ function App() {
 
               <div className="roulette-panel">
                 <div className="roulette-panel__card">
-                  <p className="bet-panel__label">Violet Loop</p>
+                  <p className="bet-panel__label">Lucky Reels</p>
                   <h3>{slotsBonusActive ? 'Bonus in play' : 'Machine ready'}</h3>
                   <div className="bet-entry roulette-panel__bet-entry">
                     <div className="bet-entry__form">
@@ -6385,7 +6694,7 @@ function App() {
                   {betInputError ? <p className="bet-panel__error">{betInputError}</p> : null}
                   <div className="roulette-summary">
                     <div className="roulette-summary__row">
-                      <span>Current play</span>
+                      <span>Current bet</span>
                       <strong>{formatPoints(bet)}</strong>
                     </div>
                     <div className="roulette-summary__row">
@@ -6410,7 +6719,7 @@ function App() {
                             ? formatSignedPoints(slotsResult.delta)
                             : slotsResult.delta < 0
                               ? formatSignedPoints(slotsResult.delta)
-                              : '0 pts'}
+                              : '$0'}
                         </strong>
                       </div>
                     ) : null}
@@ -6418,6 +6727,242 @@ function App() {
                 </div>
               </div>
             </div>
+          ) : selectedGame === 'jetstream' ? (
+            createPortal(
+              <div className="jet-fs" style={{ top: `${fullscreenTopOffset}px` }}>
+                <div className="jet-fs__scene">
+                  <JetstreamBoard
+                    status={jetstreamStatus}
+                    round={jetstreamRound}
+                    carrier={jetstreamCarrier}
+                    splashSegment={jetstreamSplashSegment}
+                    multiplierRef={jetstreamMultiplierRef}
+                  />
+
+                  <div className="jet-fs__hud">
+                    <span className="jet-fs__eyebrow">Jetstream</span>
+                    <p className="jet-fs__status">{jetstreamMessage}</p>
+                  </div>
+
+                  {jetstreamHistory.length > 0 ? (
+                    <div className="jet-fs__recent">
+                      {jetstreamHistory.map((round) => (
+                        <span
+                          key={round.id}
+                          className={`jet-chip${round.cashed ? ' is-win' : ' is-loss'}`}
+                        >
+                          {formatJetMultiplier(round.multiplier)}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  <button type="button" className="jet-fs__back" onClick={handleBackToGames}>
+                    ← Lobby
+                  </button>
+                </div>
+
+                <div className="jet-fs__bar">
+                  <div className="jet-fs__field">
+                    <label>Bet</label>
+                    <div className="bet-entry__form">
+                      <input
+                        type="number"
+                        min={MIN_BET}
+                        value={betInput}
+                        disabled={jetstreamStatus === 'flying'}
+                        onChange={(event) => {
+                          setBetInput(event.target.value)
+                          setBetInputError('')
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="bet-entry__apply"
+                        onClick={applyTypedBet}
+                        disabled={!canPlaceBets || jetstreamStatus === 'flying'}
+                      >
+                        Set
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="jet-fs__meta">
+                    <span>Carrier</span>
+                    <strong>{jetstreamCarrier} / {JET_CARRIERS}</strong>
+                    {jetstreamResult ? (
+                      <em className={jetstreamResult.cashed ? 'is-win' : 'is-loss'}>
+                        {jetstreamResult.cashed
+                          ? `+${formatPoints(jetstreamResult.payout)}`
+                          : formatSignedPoints(jetstreamResult.net)}
+                      </em>
+                    ) : null}
+                  </div>
+
+                  {betInputError ? <p className="jet-fs__error">{betInputError}</p> : null}
+
+                  <div className="jet-fs__actions">
+                    {jetstreamStatus === 'flying' ? (
+                      <>
+                        <button
+                          type="button"
+                          className="action-button jet-fs__land"
+                          onClick={handleJetLand}
+                          disabled={jetstreamBusy || jetstreamCarrier < 1}
+                        >
+                          Land ({jetstreamCarrier >= 1 && jetstreamRound
+                            ? formatJetMultiplier(jetstreamRound.multipliers[jetstreamCarrier - 1])
+                            : '—'})
+                        </button>
+                        <button
+                          type="button"
+                          className="action-button action-button--primary jet-fs__go"
+                          onClick={handleJetFlyOn}
+                          disabled={jetstreamBusy || jetstreamCarrier >= JET_CARRIERS}
+                        >
+                          {jetstreamCarrier >= JET_CARRIERS
+                            ? 'Max reached'
+                            : `Fly On → ${jetstreamRound ? formatJetMultiplier(jetstreamRound.multipliers[jetstreamCarrier]) : ''}`}
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        className="action-button action-button--primary jet-fs__go"
+                        onClick={handleLaunchJetstream}
+                        disabled={!canPlaceBets || bet > bankroll}
+                      >
+                        {jetstreamStatus === 'idle' ? 'Launch' : 'Launch Again'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>,
+              document.body,
+            )
+          ) : selectedGame === 'chicken' ? (
+            createPortal(
+              <div className="chicken-fs" style={{ top: `${fullscreenTopOffset}px` }}>
+                <div className="chicken-fs__scene">
+                  <ChickenScene
+                    multipliers={getChickenConfig(chickenDifficulty).multipliers}
+                    currentLane={chickenLane}
+                    status={chickenStatus}
+                    deathLane={chickenDeathLane}
+                  />
+
+                  <div className="chicken-fs__hud">
+                    <span className="chicken-fs__eyebrow">
+                      Chicken Cross · {getChickenConfig(chickenDifficulty).label}
+                    </span>
+                    <p className="chicken-fs__status">{chickenMessage}</p>
+                  </div>
+
+                  <div className="chicken-fs__cashout">
+                    <span>Cash out</span>
+                    <strong>
+                      {chickenLane >= 1 && (chickenStatus === 'playing' || chickenStatus === 'cashed')
+                        ? formatPoints(roundMoney(chickenBet * getChickenConfig(chickenDifficulty).multipliers[chickenLane - 1]))
+                        : formatPoints(0)}
+                    </strong>
+                    {chickenResult ? (
+                      <em className={chickenResult.cashed ? 'is-win' : 'is-loss'}>
+                        {chickenResult.cashed
+                          ? `${formatChickenMultiplier(chickenResult.multiplier)} · ${formatSignedPoints(chickenResult.net)}`
+                          : `Splat · ${formatSignedPoints(chickenResult.net)}`}
+                      </em>
+                    ) : null}
+                  </div>
+
+                  <button type="button" className="chicken-fs__back" onClick={handleBackToGames}>
+                    ← Lobby
+                  </button>
+                </div>
+
+                <div className="chicken-fs__bar">
+                  <div className="chicken-fs__diffs">
+                    {CHICKEN_DIFFICULTY_ORDER.map((difficulty) => {
+                      const config = CHICKEN_DIFFICULTIES[difficulty]
+                      return (
+                        <button
+                          key={difficulty}
+                          type="button"
+                          className={`chicken-fs__diff${chickenDifficulty === difficulty ? ' is-active' : ''}`}
+                          onClick={() => handleSelectChickenDifficulty(difficulty)}
+                          disabled={chickenStatus === 'playing'}
+                        >
+                          <strong>{config.label}</strong>
+                          <span>{formatChickenMultiplier(config.max)}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+
+                  <div className="chicken-fs__bet">
+                    <label>Bet</label>
+                    <div className="bet-entry__form">
+                      <input
+                        type="number"
+                        min={MIN_BET}
+                        value={betInput}
+                        disabled={chickenStatus === 'playing'}
+                        onChange={(event) => {
+                          setBetInput(event.target.value)
+                          setBetInputError('')
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="bet-entry__apply"
+                        onClick={applyTypedBet}
+                        disabled={!canPlaceBets || chickenStatus === 'playing'}
+                      >
+                        Set
+                      </button>
+                    </div>
+                    <span className="chicken-fs__lane">
+                      Lane {chickenLane}/{CHICKEN_LANES}
+                      {betInputError ? <em className="chicken-fs__error"> · {betInputError}</em> : null}
+                    </span>
+                  </div>
+
+                  <div className="chicken-fs__actions">
+                    {chickenStatus === 'playing' ? (
+                      <>
+                        <button
+                          type="button"
+                          className="action-button chicken-fs__cash"
+                          onClick={handleChickenCashout}
+                          disabled={chickenLane < 1}
+                        >
+                          Cash Out
+                        </button>
+                        <button
+                          type="button"
+                          className="action-button action-button--primary chicken-fs__go"
+                          onClick={handleChickenStep}
+                          disabled={chickenLane >= CHICKEN_LANES}
+                        >
+                          {chickenLane >= CHICKEN_LANES
+                            ? 'Max reached'
+                            : `Cross → ${formatChickenMultiplier(getChickenConfig(chickenDifficulty).multipliers[chickenLane])}`}
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        className="action-button action-button--primary chicken-fs__go"
+                        onClick={handleStartChickenRun}
+                        disabled={!canPlaceBets || bet > bankroll}
+                      >
+                        {chickenStatus === 'idle' ? 'Start Crossing' : 'Play Again'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>,
+              document.body,
+            )
           ) : selectedGame === 'plinko' ? (
             <div className="plinko-room">
               <div className="plinko-stage">
@@ -6438,7 +6983,7 @@ function App() {
 
               <div className="roulette-panel">
                 <div className="roulette-panel__card">
-                  <p className="bet-panel__label">Peg Drop</p>
+                  <p className="bet-panel__label">Plinko</p>
                   <h3>{plinkoInFlightDrops > 0 ? 'Ball in motion' : 'Ready to drop'}</h3>
                   <div className="bet-entry roulette-panel__bet-entry">
                     <div className="bet-entry__form">
@@ -6464,7 +7009,7 @@ function App() {
                   {betInputError ? <p className="bet-panel__error">{betInputError}</p> : null}
                   <div className="roulette-summary">
                     <div className="roulette-summary__row">
-                      <span>Current play</span>
+                      <span>Current bet</span>
                       <strong>{formatPoints(bet)}</strong>
                     </div>
                     <div className="roulette-summary__row">
@@ -6496,7 +7041,7 @@ function App() {
                         {plinkoHistory.map((round) => (
                           <article className="plinko-history__item" key={round.id}>
                             <strong>{Number.isInteger(round.multiplier) ? `${round.multiplier}x` : `${round.multiplier.toFixed(1)}x`}</strong>
-                            <span>Play {formatPoints(round.bet)}</span>
+                            <span>Bet {formatPoints(round.bet)}</span>
                             <span>{formatSignedPoints(round.net)}</span>
                           </article>
                         ))}
@@ -6507,7 +7052,7 @@ function App() {
                     <div className="roulette-summary plinko-result">
                       <div className="roulette-summary__row">
                         <span>Last return</span>
-                        <strong>{plinkoResult ? formatPoints(plinkoResult.payout) : '0 pts'}</strong>
+                        <strong>{plinkoResult ? formatPoints(plinkoResult.payout) : '$0'}</strong>
                       </div>
                     </div>
                   </div>
@@ -6517,17 +7062,37 @@ function App() {
           ) : selectedGame === 'blackjack' ? (
             <div className="blackjack-table">
               <div className="blackjack-table__felt">
+                <div className="blackjack-deck" aria-hidden="true">
+                  <span className="blackjack-deck__card" />
+                  <span className="blackjack-deck__card" />
+                  <span className="blackjack-deck__card" />
+                  <span className="blackjack-deck__card" />
+                </div>
                 <div className="table-spot table-spot--dealer">
-                  <span className="table-spot__label">Lead Hand</span>
+                  <span className="table-spot__label">Dealer</span>
                   <div className="card-row">
                     {dealerHand.length === 0 ? (
                       <div className="empty-seat">Waiting to start</div>
                     ) : (
                       dealerHand.map((card, index) =>
-                        index === 1 && !dealerRevealed && !devMode ? (
-                          <div className="playing-card playing-card--back" key="dealer-hidden" />
+                        index === 1 && !devMode ? (
+                          // hole card: deals in as a back, then flips face-up in
+                          // place on reveal (stable key so it never re-deals)
+                          <div
+                            className={`playing-card blackjack-hole${dealerRevealed ? ' blackjack-hole--up' : ''}`}
+                            key="dealer-hole"
+                            ref={aimCardFromDeck}
+                          >
+                            <div className="blackjack-hole__inner">
+                              <div className="blackjack-hole__face blackjack-hole__front">
+                                <span>{card.rank}</span>
+                                <small className={getSuitColorClass(card.suit)}>{card.suit}</small>
+                              </div>
+                              <span className="blackjack-hole__face blackjack-hole__back" />
+                            </div>
+                          </div>
                         ) : (
-                          <div className="playing-card" key={`${card.rank}-${card.suit}-${index}`}>
+                          <div className="playing-card" key={`${card.rank}-${card.suit}-${index}`} ref={aimCardFromDeck}>
                             <span>{card.rank}</span>
                             <small className={getSuitColorClass(card.suit)}>{card.suit}</small>
                           </div>
@@ -6538,7 +7103,7 @@ function App() {
                 </div>
 
                 <div className="table-center">
-                  <p className="table-center__title">Lumex Arcade Twenty-One</p>
+                  <p className="table-center__title">UES Underground Casino Blackjack</p>
                   <p className="table-center__rules">Reach 21 without going over</p>
                   <p className="table-center__rules">Face cards count as 10</p>
                   {roundResult ? (
@@ -6567,6 +7132,7 @@ function App() {
                               <div
                                 className="playing-card"
                                 key={`${card.rank}-${card.suit}-${index}-${cardIndex}`}
+                                ref={aimCardFromDeck}
                               >
                                 <span>{card.rank}</span>
                                 <small className={getSuitColorClass(card.suit)}>{card.suit}</small>
@@ -6576,7 +7142,7 @@ function App() {
                           <div className="player-hand__meta">
                             <span>{playerHands.length > 1 ? `Hand ${index + 1}` : 'Main Hand'}</span>
                             <strong>
-                              {getHandValue(hand)} • Play {formatPoints(handBets[index] ?? bet)}
+                              {getHandValue(hand)} • Bet {formatPoints(handBets[index] ?? bet)}
                             </strong>
                           </div>
                         </div>
@@ -6584,7 +7150,7 @@ function App() {
                     )}
                   </div>
                   <div className="bet-ring">
-                    <span>{playerHands.length > 1 ? 'Total Play' : 'Current Play'}</span>
+                    <span>{playerHands.length > 1 ? 'Total Bet' : 'Current Bet'}</span>
                     <strong>{formatPoints(playerHands.length > 0 ? totalWager : bet)}</strong>
                   </div>
                 </div>
@@ -6592,7 +7158,7 @@ function App() {
 
               <div className="blackjack-controls">
                 <div className="bet-panel">
-                  <p className="bet-panel__label">Play Amount</p>
+                  <p className="bet-panel__label">Bet Amount</p>
                   <div className="bet-entry">
                     <div className="bet-entry__form">
                       <input
@@ -6611,7 +7177,7 @@ function App() {
                         onClick={applyTypedBet}
                         disabled={isHandActive || !canPlaceBets}
                       >
-                        Set play
+                        Set bet
                       </button>
                     </div>
                   </div>
@@ -6626,15 +7192,15 @@ function App() {
                       onClick={handleDeal}
                       disabled={!canPlaceBets || bet > bankroll}
                     >
-                      {dealerRevealed ? 'Start Next Round' : 'Start Round'}
+                      {dealerRevealed ? 'Deal Again' : 'Deal'}
                     </button>
                   ) : (
                     <>
                       <button type="button" className="action-button" onClick={handleHit}>
-                        Draw
+                        Hit
                       </button>
                       <button type="button" className="action-button" onClick={handleStand}>
-                        Hold
+                        Stand
                       </button>
                       <button
                         type="button"
@@ -6642,11 +7208,11 @@ function App() {
                         onClick={handleDouble}
                         disabled={!canDouble}
                       >
-                        Boost
+                        Double
                       </button>
                       {canSplit && (
                         <button type="button" className="action-button" onClick={handleSplit}>
-                          Divide
+                          Split
                         </button>
                       )}
                     </>
@@ -6659,13 +7225,13 @@ function App() {
               <div className="roulette-stage">
                 <div className="roulette-stage__header">
                   <div>
-                    <p className="bet-panel__label">Color Wheel</p>
+                    <p className="bet-panel__label">Roulette</p>
                     <p className="roulette-stage__status">
                       {rouletteIsSpinning
                         ? 'Wheel is spinning...'
                         : rouletteWinningNumber !== null
-                          ? `Last landing spot: ${rouletteWinningNumber}`
-                          : 'Pick one or more targets, then spin'}
+                          ? `Last number: ${rouletteWinningNumber}`
+                          : 'Place your bets, then spin'}
                     </p>
                   </div>
                   <button
@@ -6975,7 +7541,7 @@ function App() {
                 <div className="roulette-panel__card">
                   {rouletteBets.length > 0 ? (
                     <>
-                      <p className="bet-panel__label">Wheel Picks</p>
+                      <p className="bet-panel__label">Bets</p>
                       <h3>{rouletteBets.length} pick{rouletteBets.length === 1 ? '' : 's'} ready</h3>
                       <div className="roulette-bet-list">
                         {rouletteBets.map((entry) => (
@@ -6999,7 +7565,7 @@ function App() {
                             >
                               🗑
                             </button>
-                            <p className="bet-panel__label">Wheel Pick</p>
+                            <p className="bet-panel__label">Bet</p>
                             <h3>{getRouletteBetDisplayLabel(entry.bet)}</h3>
                             <div className="bet-entry roulette-panel__bet-entry">
                               <div className="bet-entry__form">
@@ -7040,7 +7606,7 @@ function App() {
 
                                     if (nextTotal > bankroll) {
                                       setBetInputError(
-                                        `Total wheel picks cannot be more than your score of ${formatPoints(bankroll)}.`,
+                                        `Total bets cannot be more than your bankroll of ${formatPoints(bankroll)}.`,
                                       )
                                       return
                                     }
@@ -7066,7 +7632,7 @@ function App() {
                             </div>
                             <div className="roulette-summary">
                               <div className="roulette-summary__row">
-                                <span>Current play</span>
+                                <span>Current bet</span>
                                 <strong>{formatPoints(entry.amount)}</strong>
                               </div>
                             </div>
@@ -7076,7 +7642,7 @@ function App() {
                       {betInputError ? <p className="bet-panel__error">{betInputError}</p> : null}
                       <div className="roulette-summary">
                         <div className="roulette-summary__row">
-                          <span>Total play</span>
+                          <span>Total bet</span>
                           <strong>{formatPoints(rouletteTotalBet)}</strong>
                         </div>
                         <div className="roulette-summary__row">
@@ -7093,11 +7659,11 @@ function App() {
                     </>
                   ) : (
                     <>
-                      <p className="bet-panel__label">Color Wheel</p>
-                      <h3>Build your pick list</h3>
+                      <p className="bet-panel__label">Roulette</p>
+                      <h3>Build your bet slip</h3>
                       <p className="roulette-panel__copy">
-                        Click any number, or pick Red, Black, Odd, Even, 1-18, or 19-36. Each
-                        click adds a new pick card here, and every card can have its own play amount.
+                        Click any number, or bet Red, Black, Odd, Even, 1-18, or 19-36. Each
+                        click adds a bet to the slip, and every bet can have its own amount.
                       </p>
                     </>
                   )}
@@ -7109,7 +7675,7 @@ function App() {
               <div className="mines-stage">
                 <div className="roulette-stage__header">
                   <div>
-                    <p className="bet-panel__label">Safe Steps Grid</p>
+                    <p className="bet-panel__label">Minefield</p>
                     <p className="roulette-stage__status">{minesMessage}</p>
                   </div>
                 </div>
@@ -7134,11 +7700,11 @@ function App() {
                       >
                         {tile.revealed ? (
                           <span className="mines-cell__content">
-                            {tile.isMine ? 'HAZARD' : `x${minesMultiplier.toFixed(2)}`}
+                            {tile.isMine ? 'MINE' : `x${minesMultiplier.toFixed(2)}`}
                           </span>
                         ) : devMode && tile.isMine ? (
                           <span className="mines-cell__content mines-cell__content--dev-mine">
-                            HAZARD
+                            MINE
                           </span>
                         ) : (
                           <span className="mines-cell__cover" />
@@ -7164,7 +7730,7 @@ function App() {
 
               <div className="roulette-panel">
                 <div className="roulette-panel__card">
-                  <p className="bet-panel__label">Safe Steps</p>
+                  <p className="bet-panel__label">Mines</p>
                   <h3>{minesRoundActive ? 'Keep going or collect now' : 'Start a round'}</h3>
                   <div className="bet-entry roulette-panel__bet-entry">
                     <div className="bet-entry__form">
@@ -7207,18 +7773,18 @@ function App() {
                         onClick={applyMinesCount}
                         disabled={minesRoundActive}
                       >
-                        Set Hazards
+                        Set Mines
                       </button>
                     </div>
                   </div>
                   {betInputError ? <p className="bet-panel__error">{betInputError}</p> : null}
                   <div className="roulette-summary">
                     <div className="roulette-summary__row">
-                      <span>Current play</span>
+                      <span>Current bet</span>
                       <strong>{formatPoints(bet)}</strong>
                     </div>
                     <div className="roulette-summary__row">
-                      <span>Hazards</span>
+                      <span>Mines</span>
                       <strong>{minesCount}</strong>
                     </div>
                     <div className="roulette-summary__row">
@@ -7239,7 +7805,7 @@ function App() {
                     </div>
                     <div className="roulette-summary__row">
                       <span>Collect now</span>
-                      <strong>{minesSafePicks > 0 ? formatPoints(minesCashOutAmount) : '0 pts'}</strong>
+                      <strong>{minesSafePicks > 0 ? formatPoints(minesCashOutAmount) : '$0'}</strong>
                     </div>
                   </div>
                   {!minesRoundActive ? (
@@ -7269,7 +7835,7 @@ function App() {
               <div className="poker-stage">
                 <div className="roulette-stage__header">
                   <div>
-                    <p className="bet-panel__label">{pokerScreen === 'table' ? 'Table Match' : 'Match Lobby'}</p>
+                    <p className="bet-panel__label">{pokerScreen === 'table' ? 'Poker' : 'Poker Lobby'}</p>
                     <p className="roulette-stage__status">{pokerMessage}</p>
                   </div>
                 </div>
@@ -7389,7 +7955,11 @@ function App() {
                                     <div className={`poker-seat__cards${isFoldAnimating ? ' poker-seat__cards--folding' : ''}`}>
                                       {shouldRevealCards
                                         ? seatState.holeCards.map((card, index) => (
-                                            <div className="playing-card poker-seat__card" key={`${seat.id}-${index}`}>
+                                            <div
+                                              className="playing-card poker-seat__card poker-seat__card--reveal"
+                                              key={`${seat.id}-${card.rank}-${card.suit}`}
+                                              style={{ animationDelay: `${index * 90}ms` }}
+                                            >
                                               <span>{card.rank}</span>
                                               <small className={getSuitColorClass(card.suit)}>{card.suit}</small>
                                             </div>
@@ -7419,10 +7989,10 @@ function App() {
                         })}
 
                         <div className="poker-center">
-                          <p className="table-center__title">Shape Match</p>
+                          <p className="table-center__title">Texas Hold’em</p>
                           <p className="table-center__rules">
                             {pokerGame
-                              ? `Center ${formatPoints(pokerGame.pot)} • Current play ${formatPoints(pokerGame.currentBet)}`
+                              ? `Pot ${formatPoints(pokerGame.pot)} • Current bet ${formatPoints(pokerGame.currentBet)}`
                               : pokerPlayerCount >= 2
                               ? 'Enough players are seated to start'
                               : `Waiting for ${2 - pokerPlayerCount} more player${2 - pokerPlayerCount === 1 ? '' : 's'}`}
@@ -7486,7 +8056,11 @@ function App() {
                           <p className="bet-panel__label">Your Hand</p>
                           <div className="poker-your-hand__cards">
                             {pokerYouState.holeCards.map((card, index) => (
-                              <div className="playing-card poker-your-hand__card" key={`you-${index}`}>
+                              <div
+                                className="playing-card poker-your-hand__card poker-deal"
+                                key={`you-${card.rank}-${card.suit}`}
+                                style={{ animationDelay: `${index * 110}ms` }}
+                              >
                                 <span>{card.rank}</span>
                                 <small className={getSuitColorClass(card.suit)}>{card.suit}</small>
                               </div>
@@ -7498,7 +8072,7 @@ function App() {
                       {!pokerGame ? (
                         <>
                           <div className="poker-buyin poker-blinds">
-                            <p className="bet-panel__label">Start Markers</p>
+                            <p className="bet-panel__label">Blinds</p>
                             {pokerHostId === pokerPlayerId ? (
                               <>
                                 <div className="bet-entry__form">
@@ -7521,11 +8095,11 @@ function App() {
                                 </div>
                                 <div className="roulette-summary poker-buyin__summary">
                                   <div className="roulette-summary__row">
-                                    <span>Small marker</span>
+                                    <span>Small blind</span>
                                     <strong>{formatPoints(pokerSmallBlind)}</strong>
                                   </div>
                                   <div className="roulette-summary__row">
-                                    <span>Big marker</span>
+                                    <span>Big blind</span>
                                     <strong>{formatPoints(pokerBigBlind)}</strong>
                                   </div>
                                 </div>
@@ -7533,11 +8107,11 @@ function App() {
                             ) : (
                               <div className="roulette-summary poker-buyin__summary">
                                 <div className="roulette-summary__row">
-                                  <span>Small marker</span>
+                                  <span>Small blind</span>
                                   <strong>{formatPoints(pokerSmallBlind)}</strong>
                                 </div>
                                 <div className="roulette-summary__row">
-                                  <span>Big marker</span>
+                                  <span>Big blind</span>
                                   <strong>{formatPoints(pokerBigBlind)}</strong>
                                 </div>
                               </div>
@@ -7545,7 +8119,7 @@ function App() {
                           </div>
 
                           <div className="poker-buyin">
-                            <p className="bet-panel__label">Entry Points</p>
+                            <p className="bet-panel__label">Buy-In</p>
                             {pokerHostId === pokerPlayerId ? (
                               <div className="bet-entry__form">
                                 <input
@@ -7576,7 +8150,7 @@ function App() {
 
                           <div className="roulette-summary poker-bankroll">
                             <div className="roulette-summary__row">
-                              <span>Score</span>
+                              <span>Bankroll</span>
                               <strong>{formatPoints(bankroll)}</strong>
                             </div>
                             {pokerYouSeat ? (
@@ -7635,7 +8209,7 @@ function App() {
                                 {pokerCallAmount > 0 ? `Match ${formatPoints(pokerCallAmount)}` : 'Check'}
                               </button>
                               <div className="poker-controls__raise-card">
-                                <p className="poker-controls__raise-label">Set next play amount</p>
+                                <p className="poker-controls__raise-label">Set your raise</p>
                                 <div className="bet-entry__form poker-controls__raise">
                                   <input
                                     type="number"
@@ -7656,7 +8230,7 @@ function App() {
                                   </button>
                                 </div>
                                 <p className="poker-controls__raise-hint">
-                                  Enter the total play amount you want to make.
+                                  Enter the total amount you want to bet.
                                 </p>
                               </div>
                             </div>
@@ -7777,7 +8351,7 @@ function App() {
               {pokerNeedsBuyInConfirmation && pokerPendingStart ? (
                 <div className="poker-modal">
                   <div className="poker-modal__card">
-                    <p className="bet-panel__label">Entry Confirm</p>
+                    <p className="bet-panel__label">Confirm Buy-In</p>
                     <h3>Do you want to spend {formatPoints(pokerPendingStart.buyIn)} to join?</h3>
                     <p className="roulette-panel__copy">
                       Choose `Yes` to stay at the table and continue into the hand. Choose `No`
@@ -7805,10 +8379,10 @@ function App() {
               {pokerInsufficientFundsModal ? (
                 <div className="poker-modal">
                   <div className="poker-modal__card">
-                    <p className="bet-panel__label">Entry Error</p>
+                    <p className="bet-panel__label">Buy-In Error</p>
                     <h3>Not enough points</h3>
                     <p className="roulette-panel__copy">
-                      You did not have enough score to cover the table entry, so you were sent
+                      You did not have enough chips to cover the buy-in, so you were sent
                       back to the home screen.
                     </p>
                     <div className="poker-modal__actions poker-modal__actions--single">
@@ -7831,7 +8405,7 @@ function App() {
               <div className="hilo-stage">
                 <div className="roulette-stage__header">
                   <div>
-                    <p className="bet-panel__label">Up Down Board</p>
+                    <p className="bet-panel__label">Hi-Lo Table</p>
                     <p className="roulette-stage__status">
                       {hiLoMessage}
                     </p>
@@ -7889,7 +8463,7 @@ function App() {
 
               <div className="roulette-panel">
                 <div className="roulette-panel__card">
-                  <p className="bet-panel__label">Up Down</p>
+                  <p className="bet-panel__label">Hi-Lo</p>
                   <h3>{hiLoCurrentCard && !hiLoResult ? 'Make your guess' : 'Start a round'}</h3>
                   <div className="bet-entry roulette-panel__bet-entry">
                     <div className="bet-entry__form">
@@ -7909,14 +8483,14 @@ function App() {
                         onClick={applyTypedBet}
                         disabled={Boolean(hiLoCurrentCard && !hiLoResult) || !canPlaceBets}
                       >
-                        Set play
+                        Set bet
                       </button>
                     </div>
                   </div>
                   {betInputError ? <p className="bet-panel__error">{betInputError}</p> : null}
                   <div className="roulette-summary">
                     <div className="roulette-summary__row">
-                      <span>Current play</span>
+                      <span>Current bet</span>
                       <strong>{formatPoints(bet)}</strong>
                     </div>
                     <div className="roulette-summary__row">
@@ -7929,7 +8503,7 @@ function App() {
                     </div>
                     <div className="roulette-summary__row">
                       <span>Collect now</span>
-                      <strong>{hiLoStreak > 0 ? formatPoints(hiLoCashOutAmount) : '0 pts'}</strong>
+                      <strong>{hiLoStreak > 0 ? formatPoints(hiLoCashOutAmount) : '$0'}</strong>
                     </div>
                     {hiLoGuess ? (
                       <div className="roulette-summary__row">
@@ -7986,7 +8560,7 @@ function App() {
                         disabled={hiLoStreak === 0 || hiLoResolving}
                       >
                         <span>Collect</span>
-                        <small>{hiLoStreak > 0 ? formatPoints(hiLoCashOutAmount) : '0 pts'}</small>
+                        <small>{hiLoStreak > 0 ? formatPoints(hiLoCashOutAmount) : '$0'}</small>
                       </button>
                     </div>
                   )}
@@ -7995,6 +8569,7 @@ function App() {
             </div>
           )}
             </section>
+            )}
           </div>
         </div>
       {devModePromptOpen ? (
