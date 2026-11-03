@@ -2600,8 +2600,19 @@ select {
   display: block;
 }
 
-/* ---- Chicken Cross (fullscreen 3D) ---- */
+/* ---- Chicken Cross (fullscreen 2D) — theme "Midnight Asphalt" ---- */
 .chicken-fs {
+  --ck-night: #0d0f15;
+  --ck-asphalt: #1c1f28;
+  --ck-asphalt-hi: #262a35;
+  --ck-paint: #f1ead8;
+  --ck-gold: #ffc93e;
+  --ck-gold-deep: #c98f12;
+  --ck-mint: #3ee39a;
+  --ck-mint-deep: #1f9e66;
+  --ck-red: #ff4b55;
+  --ck-ink: #1b1712;
+  --ck-display: 'Lilita One', 'Archivo', sans-serif;
   position: fixed;
   left: 0;
   right: 0;
@@ -2609,7 +2620,8 @@ select {
   z-index: 60;
   display: flex;
   flex-direction: column;
-  background: #0a1020;
+  background: var(--ck-night);
+  color: var(--ck-paint);
 }
 
 .chicken-fs__scene {
@@ -2618,15 +2630,13 @@ select {
   min-height: 0;
 }
 
-.chicken-scene {
+.chicken-road {
   position: absolute;
   inset: 0;
 }
 
-.chicken-scene canvas {
+.chicken-road__canvas {
   display: block;
-  width: 100% !important;
-  height: 100% !important;
 }
 
 .chicken-fs__back {
@@ -2635,18 +2645,18 @@ select {
   left: 16px;
   padding: 8px 16px;
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  background: rgba(10, 16, 32, 0.55);
-  color: #e9efff;
+  border: 1px solid rgba(241, 234, 216, 0.22);
+  background: rgba(13, 15, 21, 0.62);
+  color: var(--ck-paint);
   font-size: 0.9rem;
   cursor: pointer;
   backdrop-filter: blur(8px);
-  transition: border-color 0.15s ease, background 0.15s ease;
+  transition: border-color 0.12s ease, background 0.12s ease;
 }
 
 .chicken-fs__back:hover {
-  border-color: rgba(255, 206, 84, 0.7);
-  background: rgba(10, 16, 32, 0.8);
+  border-color: var(--ck-gold);
+  background: rgba(13, 15, 21, 0.85);
 }
 
 .chicken-fs__hud {
@@ -2656,117 +2666,146 @@ select {
   transform: translateX(-50%);
   text-align: center;
   pointer-events: none;
-  max-width: 60%;
+  max-width: 56%;
 }
 
 .chicken-fs__eyebrow {
-  display: block;
-  font-size: 0.78rem;
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
-  color: #ffce54;
-  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.8);
+  display: inline-block;
+  padding: 3px 12px 2px;
+  border-radius: 6px;
+  background: var(--ck-gold);
+  color: var(--ck-ink);
+  font-family: var(--ck-display);
+  font-size: 0.95rem;
+  letter-spacing: 0.04em;
+  box-shadow: 0 3px 0 var(--ck-gold-deep);
 }
 
 .chicken-fs__status {
-  margin: 4px 0 0;
+  margin: 10px 0 0;
   font-size: 0.95rem;
-  color: #e9efff;
-  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.9);
+  color: var(--ck-paint);
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.95);
 }
 
 .chicken-fs__cashout {
   position: absolute;
   top: 14px;
-  right: 18px;
+  right: 16px;
+  min-width: 150px;
+  padding: 10px 16px 12px;
+  border-radius: 14px;
   text-align: right;
   display: grid;
   gap: 2px;
   pointer-events: none;
+  background: rgba(13, 15, 21, 0.72);
+  border: 1px solid rgba(255, 201, 62, 0.35);
+  backdrop-filter: blur(8px);
 }
 
 .chicken-fs__cashout span {
-  font-size: 0.7rem;
+  font-size: 0.68rem;
   text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: rgba(233, 239, 255, 0.7);
-  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.8);
+  letter-spacing: 0.14em;
+  color: rgba(241, 234, 216, 0.6);
 }
 
 .chicken-fs__cashout strong {
-  font-size: 1.9rem;
+  font-family: var(--ck-display);
+  font-weight: 400;
+  font-size: 2rem;
   line-height: 1;
-  color: #ffce54;
-  text-shadow: 0 3px 14px rgba(0, 0, 0, 0.9);
+  color: var(--ck-gold);
 }
 
 .chicken-fs__cashout em {
   font-style: normal;
   font-size: 0.82rem;
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .chicken-fs__cashout em.is-win {
-  color: #57e08a;
+  color: var(--ck-mint);
 }
 
 .chicken-fs__cashout em.is-loss {
-  color: #ff6a7a;
+  color: var(--ck-red);
 }
 
-/* bottom control bar */
+/* bottom control bar — hazard-tape top edge echoes the barricade */
 .chicken-fs__bar {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-  padding: 14px 22px;
-  border-top: 1px solid rgba(212, 175, 92, 0.2);
-  background: linear-gradient(180deg, rgba(12, 17, 30, 0.92), rgba(6, 9, 18, 0.98));
-  backdrop-filter: blur(14px);
+  padding: 18px 22px 14px;
+  background: linear-gradient(180deg, var(--ck-asphalt-hi), var(--ck-asphalt));
+}
+
+.chicken-fs__bar::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 5px;
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--ck-gold) 0 12px,
+    var(--ck-ink) 12px 24px
+  );
 }
 
 .chicken-fs__diffs {
   display: flex;
-  gap: 8px;
-  flex: 1;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.35);
 }
 
 .chicken-fs__diff {
   display: grid;
   gap: 1px;
-  padding: 8px 14px;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.03);
-  color: rgba(233, 239, 255, 0.9);
+  padding: 7px 14px;
+  border-radius: 10px;
+  border: 0;
+  background: transparent;
+  color: rgba(241, 234, 216, 0.82);
   cursor: pointer;
   text-align: center;
-  transition: border-color 0.15s ease, background 0.15s ease;
+  transition: background 0.12s ease, color 0.12s ease;
 }
 
 .chicken-fs__diff strong {
-  font-size: 0.9rem;
+  font-family: var(--ck-display);
+  font-weight: 400;
+  font-size: 1rem;
+  letter-spacing: 0.02em;
 }
 
 .chicken-fs__diff span {
-  font-size: 0.68rem;
-  color: #57e08a;
-  font-weight: 600;
+  font-size: 0.66rem;
+  font-weight: 700;
+  color: var(--ck-mint);
 }
 
 .chicken-fs__diff:hover:not(:disabled) {
-  border-color: rgba(87, 224, 138, 0.5);
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .chicken-fs__diff:disabled {
-  opacity: 0.45;
+  opacity: 0.4;
   cursor: not-allowed;
 }
 
 .chicken-fs__diff.is-active {
-  border-color: rgba(255, 206, 84, 0.8);
-  background: rgba(255, 206, 84, 0.12);
+  background: var(--ck-gold);
+  color: var(--ck-ink);
+}
+
+.chicken-fs__diff.is-active span {
+  color: rgba(27, 23, 18, 0.7);
 }
 
 .chicken-fs__bet {
@@ -2779,8 +2818,8 @@ select {
 .chicken-fs__bet > label {
   font-size: 0.7rem;
   text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: rgba(233, 239, 255, 0.6);
+  letter-spacing: 0.12em;
+  color: rgba(241, 234, 216, 0.6);
 }
 
 .chicken-fs__bet .bet-entry__form {
@@ -2795,11 +2834,11 @@ select {
 .chicken-fs__lane {
   grid-column: 1 / -1;
   font-size: 0.74rem;
-  color: rgba(233, 239, 255, 0.6);
+  color: rgba(241, 234, 216, 0.6);
 }
 
 .chicken-fs__error {
-  color: #ff6a7a;
+  color: var(--ck-red);
   font-style: normal;
 }
 
@@ -2810,26 +2849,64 @@ select {
   justify-content: flex-end;
 }
 
-.chicken-fs__go {
-  min-width: 200px;
-  font-size: 1.02rem;
+/* arcade buttons: a solid lip underneath that compresses on press */
+.chicken-fs .chicken-fs__go,
+.chicken-fs .chicken-fs__cash {
+  min-height: 58px;
+  border-radius: 14px;
+  border: 0;
+  font-family: var(--ck-display);
+  font-weight: 400;
+  font-size: 1.25rem;
+  letter-spacing: 0.02em;
+  text-shadow: none;
+  transform: translateY(0);
+  transition: transform 0.12s cubic-bezier(0.2, 0, 0, 1), box-shadow 0.12s cubic-bezier(0.2, 0, 0, 1), filter 0.12s ease;
 }
 
-/* keep the gold fill on hover instead of the global translucent hover */
-.chicken-fs__go.action-button--primary:hover:not(:disabled) {
-  background: linear-gradient(180deg, #ffe9b0 0%, #e0ba5e 55%, #b98a38 100%);
-  border-color: rgba(255, 244, 210, 0.85);
+.chicken-fs .chicken-fs__go {
+  min-width: 220px;
+  background: var(--ck-gold);
+  color: var(--ck-ink);
+  box-shadow: 0 5px 0 var(--ck-gold-deep), 0 10px 22px rgba(0, 0, 0, 0.45);
 }
 
-.chicken-fs__cash {
-  min-width: 130px;
-  border-color: rgba(87, 224, 138, 0.55);
-  color: #9cffc4;
+.chicken-fs .chicken-fs__cash {
+  min-width: 150px;
+  background: var(--ck-mint);
+  color: var(--ck-ink);
+  box-shadow: 0 5px 0 var(--ck-mint-deep), 0 10px 22px rgba(0, 0, 0, 0.45);
 }
 
-.chicken-fs__cash:not(:disabled):hover {
-  border-color: rgba(87, 224, 138, 0.95);
-  box-shadow: 0 0 16px rgba(87, 224, 138, 0.28);
+.chicken-fs .chicken-fs__go:hover:not(:disabled),
+.chicken-fs .chicken-fs__cash:hover:not(:disabled) {
+  filter: brightness(1.07);
+  transform: translateY(-1px);
+}
+
+.chicken-fs .chicken-fs__go.action-button--primary:hover:not(:disabled) {
+  background: var(--ck-gold);
+}
+
+.chicken-fs .chicken-fs__go:active:not(:disabled) {
+  transform: translateY(4px);
+  box-shadow: 0 1px 0 var(--ck-gold-deep), 0 4px 10px rgba(0, 0, 0, 0.45);
+}
+
+.chicken-fs .chicken-fs__cash:active:not(:disabled) {
+  transform: translateY(4px);
+  box-shadow: 0 1px 0 var(--ck-mint-deep), 0 4px 10px rgba(0, 0, 0, 0.45);
+}
+
+.chicken-fs .chicken-fs__go:disabled,
+.chicken-fs .chicken-fs__cash:disabled {
+  filter: grayscale(0.6);
+  opacity: 0.5;
+}
+
+.chicken-fs button:focus-visible {
+  outline: 3px solid var(--ck-paint);
+  outline-offset: 3px;
 }
 
 @media (max-width: 820px) {
@@ -2842,6 +2919,17 @@ select {
   .chicken-fs__actions {
     flex: 1 1 100%;
     justify-content: center;
+  }
+  .chicken-fs__hud {
+    top: 64px;
+    max-width: 90%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chicken-fs .chicken-fs__go,
+  .chicken-fs .chicken-fs__cash {
+    transition: none;
   }
 }
 
@@ -5868,8 +5956,17 @@ body,
   box-shadow: 0 0 22px rgba(94, 179, 255, 0.22), 0 12px 26px rgba(0, 0, 0, 0.5);
 }
 
-/* ---- Jetstream (fullscreen 2D crash) ---- */
+/* ---- Jetstream (fullscreen 2D flight) — theme "Flight Deck Noon" ---- */
 .jet-fs {
+  --jt-navy: #10345a;
+  --jt-navy-deep: #0a2440;
+  --jt-sky: #2f9ef0;
+  --jt-haze: #d4efff;
+  --jt-red: #e6332a;
+  --jt-paint: #ffd23f;
+  --jt-paint-deep: #c79a12;
+  --jt-mint: #3ee39a;
+  --jt-display: 'Titan One', 'Archivo', sans-serif;
   position: fixed;
   left: 0;
   right: 0;
@@ -5877,7 +5974,8 @@ body,
   z-index: 60;
   display: flex;
   flex-direction: column;
-  background: #0a1633;
+  background: var(--jt-sky);
+  color: #ffffff;
 }
 
 .jet-fs__scene {
@@ -5893,8 +5991,6 @@ body,
 
 .jet-canvas {
   display: block;
-  width: 100%;
-  height: 100%;
 }
 
 .jet-fs__back {
@@ -5903,86 +5999,86 @@ body,
   left: 16px;
   padding: 8px 16px;
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  background: rgba(10, 16, 32, 0.55);
-  color: #e9efff;
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  background: rgba(16, 52, 90, 0.55);
+  color: #ffffff;
   font-size: 0.9rem;
+  font-weight: 700;
   cursor: pointer;
-  backdrop-filter: blur(8px);
-  transition: border-color 0.15s ease, background 0.15s ease;
+  backdrop-filter: blur(6px);
+  transition: background 0.12s ease;
 }
 
 .jet-fs__back:hover {
-  border-color: rgba(94, 179, 255, 0.7);
-  background: rgba(10, 16, 32, 0.8);
+  background: rgba(16, 52, 90, 0.85);
 }
 
-.jet-fs__hud {
+/* flight status sits low over the sea, clear of the counter */
+.jet-fs__status {
   position: absolute;
-  top: 14px;
   left: 50%;
+  bottom: 16px;
   transform: translateX(-50%);
+  max-width: min(640px, 90%);
+  margin: 0;
+  padding: 7px 16px;
+  border-radius: 999px;
+  background: rgba(10, 36, 64, 0.62);
+  color: #ffffff;
+  font-size: 0.9rem;
   text-align: center;
   pointer-events: none;
-  max-width: 60%;
-}
-
-.jet-fs__eyebrow {
-  display: block;
-  font-size: 0.78rem;
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
-  color: #7fbcff;
-  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.8);
-}
-
-.jet-fs__status {
-  margin: 4px 0 0;
-  font-size: 0.95rem;
-  color: #e9efff;
-  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.9);
+  backdrop-filter: blur(6px);
 }
 
 .jet-fs__recent {
   position: absolute;
-  top: 14px;
+  top: 16px;
   right: 16px;
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 6px;
-  max-width: 42%;
+  max-width: 34%;
   pointer-events: none;
 }
 
 .jet-chip {
-  padding: 3px 9px;
+  padding: 4px 10px;
   border-radius: 999px;
-  font-size: 0.78rem;
-  font-weight: 700;
-  background: rgba(10, 16, 32, 0.6);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  font-family: var(--jt-display);
+  font-size: 0.82rem;
+  background: rgba(10, 36, 64, 0.62);
+  border: 2px solid transparent;
 }
 
 .jet-chip.is-win {
-  color: #7bf0a8;
-  border-color: rgba(87, 224, 138, 0.5);
+  color: var(--jt-paint);
+  border-color: rgba(255, 210, 63, 0.6);
 }
 
 .jet-chip.is-loss {
-  color: #ff8b97;
-  border-color: rgba(255, 91, 106, 0.45);
+  color: #ffb0b0;
+  border-color: rgba(230, 51, 42, 0.6);
 }
 
+/* control bar reads like a carrier flight deck: deck grey, yellow centreline */
 .jet-fs__bar {
+  position: relative;
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
-  gap: 20px;
-  padding: 14px 22px;
-  border-top: 1px solid rgba(94, 179, 255, 0.2);
-  background: linear-gradient(180deg, rgba(12, 22, 44, 0.92), rgba(6, 12, 26, 0.98));
-  backdrop-filter: blur(14px);
+  gap: 18px;
+  padding: 16px 22px 14px;
+  background: linear-gradient(180deg, #3c4652, #2b333d);
+}
+
+.jet-fs__bar::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 4px;
+  background: repeating-linear-gradient(90deg, var(--jt-paint) 0 26px, transparent 26px 44px);
 }
 
 .jet-fs__field {
@@ -5990,11 +6086,12 @@ body,
   gap: 4px;
 }
 
-.jet-fs__field > label {
-  font-size: 0.7rem;
+.jet-fs__field > label,
+.jet-fs__meta span {
+  font-size: 0.68rem;
   text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: rgba(233, 239, 255, 0.6);
+  letter-spacing: 0.12em;
+  color: rgba(255, 255, 255, 0.62);
 }
 
 .jet-fs__field .bet-entry__form {
@@ -6003,48 +6100,97 @@ body,
 }
 
 .jet-fs__field input {
-  width: 120px;
+  width: 110px;
 }
 
-.jet-fs__auto {
-  width: 110px;
+.jet-fs__speeds {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.28);
+}
+
+.jet-fs__speed {
+  display: grid;
+  justify-items: center;
+  gap: 5px;
+  padding: 7px 14px 8px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.85);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.jet-fs__speed strong {
+  font-family: var(--jt-display);
+  font-weight: 400;
+  font-size: 0.95rem;
+}
+
+.jet-fs__speed:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.jet-fs__speed:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.jet-fs__speed.is-active {
+  background: #ffffff;
+  color: var(--jt-navy);
+}
+
+.jet-fs__risk {
+  display: flex;
+  gap: 3px;
+}
+
+.jet-fs__risk i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.jet-fs__speed.is-active .jet-fs__risk i {
+  background: rgba(16, 52, 90, 0.2);
+}
+
+.jet-fs__risk i.is-on {
+  background: var(--jt-red);
 }
 
 .jet-fs__meta {
   display: grid;
-  align-content: end;
   gap: 1px;
-}
-
-.jet-fs__meta span {
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: rgba(233, 239, 255, 0.55);
+  white-space: nowrap;
 }
 
 .jet-fs__meta strong {
-  font-size: 1.1rem;
+  font-size: 1rem;
 }
 
 .jet-fs__meta em {
   font-style: normal;
-  font-size: 0.82rem;
-  font-weight: 600;
+  font-size: 0.85rem;
+  font-weight: 700;
 }
 
 .jet-fs__meta em.is-win {
-  color: #57e08a;
+  color: var(--jt-paint);
 }
 
 .jet-fs__meta em.is-loss {
-  color: #ff6a7a;
+  color: #ff8b8b;
 }
 
 .jet-fs__error {
   margin: 0;
-  align-self: center;
-  color: #ff6a7a;
+  color: #ff8b8b;
   font-size: 0.8rem;
 }
 
@@ -6054,26 +6200,43 @@ body,
   justify-content: flex-end;
 }
 
-.jet-fs__go {
-  min-width: 200px;
-  font-size: 1.05rem;
+/* PLAY — painted like deck markings, with a solid lip that compresses on press */
+.jet-fs .jet-fs__go {
+  min-width: 220px;
+  min-height: 58px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--jt-paint);
+  color: var(--jt-navy);
+  font-family: var(--jt-display);
+  font-weight: 400;
+  font-size: 1.35rem;
+  letter-spacing: 0.02em;
+  text-shadow: none;
+  box-shadow: 0 5px 0 var(--jt-paint-deep), 0 10px 22px rgba(0, 0, 0, 0.35);
+  transform: translateY(0);
+  transition: transform 0.12s cubic-bezier(0.2, 0, 0, 1), box-shadow 0.12s cubic-bezier(0.2, 0, 0, 1), filter 0.12s ease;
 }
 
-.jet-fs__land {
-  min-width: 150px;
-  font-size: 1.05rem;
-  font-weight: 700;
-  background: linear-gradient(180deg, #7bf0a8 0%, #34c974 55%, #1f9a56 100%);
-  border-color: rgba(123, 240, 168, 0.7);
-  color: #05230f;
+.jet-fs .jet-fs__go:hover:not(:disabled) {
+  background: var(--jt-paint);
+  filter: brightness(1.06);
+  transform: translateY(-1px);
 }
 
-.jet-fs__land:not(:disabled):hover {
-  background: linear-gradient(180deg, #93f7ba 0%, #43d883 55%, #26a862 100%);
+.jet-fs .jet-fs__go:active:not(:disabled) {
+  transform: translateY(4px);
+  box-shadow: 0 1px 0 var(--jt-paint-deep), 0 4px 10px rgba(0, 0, 0, 0.35);
 }
 
-.jet-fs__actions {
-  gap: 12px;
+.jet-fs .jet-fs__go:disabled {
+  opacity: 0.55;
+  filter: saturate(0.6);
+}
+
+.jet-fs button:focus-visible {
+  outline: 3px solid #ffffff;
+  outline-offset: 3px;
 }
 
 @media (max-width: 820px) {
@@ -6082,9 +6245,20 @@ body,
     gap: 12px;
     justify-content: center;
   }
+  .jet-fs__speeds,
   .jet-fs__actions {
     flex: 1 1 100%;
     justify-content: center;
+  }
+  .jet-fs__recent {
+    top: 60px;
+    max-width: 60%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .jet-fs .jet-fs__go {
+    transition: none;
   }
 }
 
@@ -6460,4 +6634,2014 @@ body,
   .blackjack-table .card-row .playing-card {
     animation: none;
   }
+}
+
+/* ==========================================================================
+   Shared playing-card face (Blackjack, Hi-Lo, Poker)
+   Sized in container units so one design scales from a 40px poker seat card
+   to the big Hi-Lo card.
+   ========================================================================== */
+.playing-card {
+  position: relative;
+  container-type: inline-size;
+}
+
+.card-face {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.card-face--red {
+  color: #b8202f;
+}
+
+.card-face--black {
+  color: #1c1712;
+}
+
+.card-face__corner {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.5cqw;
+  width: 22cqw;
+  line-height: 1;
+}
+
+.card-face__corner--tl {
+  top: 6cqw;
+  left: 5cqw;
+}
+
+.card-face__corner--br {
+  right: 5cqw;
+  bottom: 6cqw;
+  transform: rotate(180deg);
+}
+
+.card-face__rank,
+.card-face__court-rank {
+  font-family: 'Cinzel', Georgia, serif;
+  font-weight: 900;
+  font-style: normal;
+  line-height: 0.9;
+  color: inherit;
+}
+
+.card-face__rank {
+  font-size: 23cqw;
+  letter-spacing: -0.07em;
+}
+
+.card-face__corner-suit {
+  width: 15cqw;
+  height: 15cqw;
+}
+
+.card-face__pip {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 38cqw;
+  height: 38cqw;
+  transform: translate(-50%, -50%);
+}
+
+.card-face__pip--ace {
+  width: 50cqw;
+  height: 50cqw;
+}
+
+/* court cards: a framed monogram in place of a figure */
+.card-face__court {
+  position: absolute;
+  inset: 25cqw 23cqw;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3cqw;
+  border-radius: 4cqw;
+  border: max(1px, 1.2cqw) solid rgba(196, 150, 58, 0.8);
+  background:
+    radial-gradient(120% 90% at 50% 20%, rgba(255, 255, 255, 0.85), rgba(236, 222, 186, 0.6));
+  box-shadow: inset 0 0 0 max(1px, 1cqw) rgba(255, 255, 255, 0.9);
+}
+
+.card-face__court-rank {
+  font-size: 30cqw;
+}
+
+.card-face__court-suit {
+  width: 16cqw;
+  height: 16cqw;
+}
+
+/* The hole card flips in 3D; size containment on its 3D parent would flatten
+   the flip, so the faces (not the card) are the size containers there. */
+.playing-card.blackjack-hole {
+  container-type: normal;
+}
+
+.blackjack-hole__face {
+  container-type: inline-size;
+}
+
+/* ==========================================================================
+   Motion system — one signature curve, three durations, used by every table.
+   ========================================================================== */
+:root {
+  --ease-snap: cubic-bezier(0.2, 0, 0, 1);
+  --ease-out-back: cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  --ease-in-quick: cubic-bezier(0.3, 0, 1, 1);
+  --dur-press: 110ms;
+  --dur-hover: 160ms;
+  --dur-enter: 340ms;
+}
+
+.action-button,
+.bet-entry__apply,
+.status-badge--button {
+  transition:
+    transform var(--dur-hover) var(--ease-snap),
+    background-color var(--dur-hover) var(--ease-snap),
+    border-color var(--dur-hover) var(--ease-snap),
+    box-shadow var(--dur-hover) var(--ease-snap),
+    filter var(--dur-hover) var(--ease-snap),
+    opacity var(--dur-hover) var(--ease-snap);
+}
+
+.action-button:active:not(:disabled),
+.bet-entry__apply:active:not(:disabled),
+.status-badge--button:active {
+  transform: translateY(1px) scale(0.985);
+  transition-duration: var(--dur-press);
+}
+
+/* the gold button stays gold on hover (the generic hover used to wash it out) */
+.action-button--primary:hover:not(:disabled) {
+  background: linear-gradient(180deg, #f9e6b2 0%, #ddb65d 55%, #b48838 100%);
+  border-color: rgba(255, 240, 200, 0.85);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 248, 224, 0.7),
+    0 10px 22px rgba(0, 0, 0, 0.38),
+    0 0 18px rgba(244, 220, 156, 0.18);
+}
+
+.action-button--primary:active:not(:disabled) {
+  box-shadow:
+    inset 0 2px 6px rgba(80, 50, 10, 0.35),
+    0 3px 8px rgba(0, 0, 0, 0.3);
+}
+
+.games-panel button:focus-visible,
+.games-panel input:focus-visible,
+.home-tile:focus-visible {
+  outline: 2px solid #f4dc9c;
+  outline-offset: 3px;
+}
+
+/* results land with a small overshoot instead of popping in */
+.round-result {
+  animation: result-pop var(--dur-enter) var(--ease-out-back) both;
+}
+
+@keyframes result-pop {
+  0% {
+    opacity: 0;
+    transform: translateY(8px) scale(0.92);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ---- Blackjack ---- */
+.blackjack-table .table-center {
+  margin-top: 16px;
+  min-height: 96px;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 8px;
+}
+
+.blackjack-table .table-center__title {
+  font-size: clamp(1rem, 1.7vw, 1.38rem);
+  color: rgba(244, 220, 156, 0.62);
+  letter-spacing: 0.24em;
+  text-shadow: none;
+}
+
+.blackjack-table .table-center__rules {
+  margin: 0;
+  font-size: 0.7rem;
+  letter-spacing: 0.24em;
+  color: rgba(239, 230, 206, 0.5);
+}
+
+.blackjack-table .round-result {
+  width: min(440px, 92%);
+  margin: 0 auto;
+  border-radius: 16px;
+}
+
+.round-result--win {
+  border-color: rgba(244, 220, 156, 0.85);
+  background:
+    radial-gradient(120% 140% at 50% 0%, rgba(244, 220, 156, 0.18), transparent 60%),
+    rgba(8, 40, 26, 0.85);
+  box-shadow: 0 0 34px rgba(244, 220, 156, 0.22);
+}
+
+.round-result--win strong {
+  color: #fbe7b0;
+}
+
+.round-result--win span {
+  color: #7ff0b6;
+}
+
+.round-result--loss {
+  border-color: rgba(210, 80, 90, 0.55);
+  background: rgba(40, 10, 14, 0.66);
+}
+
+.round-result--loss span {
+  color: #ff9aa2;
+}
+
+.round-result--push {
+  border-color: rgba(239, 230, 206, 0.35);
+}
+
+/* the shoe lives in the corner, clear of the felt imprint */
+.blackjack-table .blackjack-deck {
+  top: 78px;
+  right: 74px;
+}
+
+.table-spot__total {
+  display: inline-grid;
+  place-items: center;
+  min-width: 28px;
+  height: 22px;
+  margin-left: 10px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(244, 220, 156, 0.45);
+  background: rgba(244, 220, 156, 0.14);
+  color: #fbe7b0;
+  font-family: var(--font-money);
+  font-size: 0.78rem;
+  letter-spacing: 0;
+  vertical-align: middle;
+  animation: total-tick 280ms var(--ease-out-back) both;
+}
+
+@keyframes total-tick {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+}
+
+/* the hand total waits for the first two cards to land */
+.blackjack-table .player-hand__meta {
+  animation: meta-in 260ms var(--ease-snap) 420ms both;
+}
+
+@keyframes meta-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .round-result,
+  .table-spot__total,
+  .blackjack-table .player-hand__meta {
+    animation-duration: 1ms;
+    animation-delay: 0ms;
+  }
+}
+
+/* ---- Hi-Lo ---- */
+.hilo-room .hilo-card-stack,
+.hilo-room .hilo-card {
+  width: 128px;
+  height: 182px;
+}
+
+.hilo-room .hilo-card-stack {
+  margin: 0;
+}
+
+.hilo-room .hilo-card-slot {
+  min-height: 300px;
+  align-content: center;
+}
+
+.hilo-room .hilo-card-slot > .playing-card {
+  animation: hilo-card-in var(--dur-enter) var(--ease-out-back) both;
+}
+
+@keyframes hilo-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.94);
+  }
+}
+
+/* two big guess buttons side by side, collect underneath */
+.hilo-room .action-row--trio.hilo-guess {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 0;
+}
+
+.hilo-room .hilo-guess .action-button--cashout {
+  grid-column: 1 / -1;
+  min-height: 56px;
+}
+
+.hilo-guess .action-button {
+  min-height: 78px;
+  padding: 10px 8px;
+}
+
+.hilo-guess__label {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 1.12rem;
+  letter-spacing: 0.02em;
+}
+
+.hilo-guess__label svg {
+  width: 15px;
+  height: 15px;
+}
+
+.hilo-guess .action-button small {
+  font-family: var(--font-money);
+  font-size: 0.8rem;
+  opacity: 0.8;
+}
+
+.hilo-guess .action-button--cashout:not(:disabled) {
+  border-color: rgba(53, 224, 176, 0.55);
+  background: rgba(53, 224, 176, 0.1);
+  color: #b9ffe6;
+}
+
+.hilo-guess .action-button--cashout:not(:disabled):hover {
+  background: rgba(53, 224, 176, 0.18);
+  border-color: rgba(53, 224, 176, 0.85);
+}
+
+.hilo-room .round-result {
+  position: relative;
+  z-index: 1;
+  width: min(460px, 92%);
+  margin: 20px auto 0;
+}
+
+/* ---- Roulette ---- */
+/* shadows and gloss live on the still parent, so they don't orbit with the wheel */
+.roulette-room .roulette-wheel {
+  border-radius: 50%;
+  box-shadow:
+    0 20px 36px rgba(0, 0, 0, 0.5),
+    0 0 40px rgba(244, 220, 156, 0.08);
+}
+
+.roulette-room .roulette-wheel::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: 50%;
+  background: radial-gradient(120% 90% at 32% 18%, rgba(255, 255, 255, 0.16), transparent 42%);
+  pointer-events: none;
+}
+
+.roulette-room .roulette-wheel__outer {
+  box-shadow:
+    inset 0 0 0 3px rgba(244, 220, 156, 0.55),
+    inset 0 0 26px rgba(0, 0, 0, 0.55);
+  will-change: transform;
+}
+
+.roulette-room .roulette-wheel__center {
+  background: radial-gradient(circle, #7a4320 0%, #4a2610 62%, #2c160a 100%);
+  box-shadow: inset 0 0 0 3px rgba(0, 0, 0, 0.35);
+}
+
+.roulette-room .roulette-wheel__ball {
+  z-index: 3;
+  transition: none;
+  will-change: transform;
+}
+
+/* winning number, shown upright in the hub once the ball settles */
+.roulette-wheel__result {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  width: 70px;
+  height: 70px;
+  margin: -35px 0 0 -35px;
+  border-radius: 50%;
+  border: 3px solid #f4dc9c;
+  color: #fff;
+  font-family: var(--font-display);
+  font-size: 1.7rem;
+  font-weight: 900;
+  box-shadow: 0 0 0 4px rgba(0, 0, 0, 0.35), 0 0 30px rgba(244, 220, 156, 0.45);
+  animation: hub-pop 420ms var(--ease-out-back) both;
+  pointer-events: none;
+}
+
+.roulette-wheel__result--red {
+  background: radial-gradient(circle at 40% 35%, #e0485f, #9e1c33);
+}
+
+.roulette-wheel__result--black {
+  background: radial-gradient(circle at 40% 35%, #3a3a3e, #111113);
+}
+
+.roulette-wheel__result--green {
+  background: radial-gradient(circle at 40% 35%, #2cb36d, #136b3f);
+}
+
+@keyframes hub-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+}
+
+.roulette-wheel__number--winning,
+.roulette-table__cell--winning,
+.roulette-table__zero--winning {
+  animation: pocket-glow 1.4s ease-in-out infinite;
+}
+
+.roulette-wheel__number--winning {
+  box-shadow: 0 0 0 2px #fbe7b0, 0 0 16px rgba(251, 231, 176, 0.8);
+}
+
+@keyframes pocket-glow {
+  50% {
+    filter: brightness(1.35);
+  }
+}
+
+/* betting board: hover brightens, a chip drops on every bet */
+.roulette-table__cell,
+.roulette-table__zero,
+.roulette-bets__chip {
+  position: relative;
+  transition:
+    filter var(--dur-hover) var(--ease-snap),
+    transform var(--dur-hover) var(--ease-snap),
+    box-shadow var(--dur-hover) var(--ease-snap);
+}
+
+.roulette-table__cell:hover:not(:disabled),
+.roulette-table__zero:hover:not(:disabled),
+.roulette-bets__chip:hover:not(:disabled) {
+  filter: brightness(1.2);
+}
+
+.roulette-table__cell--selected::after,
+.roulette-table__zero--selected::after,
+.roulette-bets__chip--active::after {
+  content: '';
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle, #b8202f 0 34%, #f6f1e6 35% 44%, transparent 45%),
+    repeating-conic-gradient(#f6f1e6 0 20deg, #b8202f 20deg 40deg);
+  box-shadow:
+    0 0 0 1.5px rgba(0, 0, 0, 0.4),
+    0 3px 6px rgba(0, 0, 0, 0.5);
+  animation: chip-drop 280ms var(--ease-out-back) both;
+  pointer-events: none;
+}
+
+.roulette-table__cell--selected::after,
+.roulette-table__zero--selected::after {
+  top: 3px;
+  right: 3px;
+}
+
+.roulette-bets__chip--active::after {
+  top: 50%;
+  right: 10px;
+  margin-top: -10px;
+}
+
+@keyframes chip-drop {
+  from {
+    opacity: 0;
+    transform: translateY(-12px) scale(1.5);
+  }
+}
+
+/* payout legend: a quiet two-column list instead of six cramped tiles */
+.roulette-room .roulette-payouts {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  padding: 4px 0;
+  border: 1px solid rgba(247, 228, 172, 0.2);
+  border-radius: 14px;
+  background: rgba(8, 34, 22, 0.24);
+}
+
+.roulette-room .roulette-payouts__item {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 7px 14px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.roulette-room .roulette-payouts__item + .roulette-payouts__item {
+  border-top: 1px solid rgba(247, 228, 172, 0.1);
+}
+
+.roulette-room .roulette-payouts__item span {
+  font-size: 0.68rem;
+  letter-spacing: 0.1em;
+}
+
+.roulette-room .roulette-payouts__item strong {
+  margin: 0;
+  font-family: var(--font-money);
+  font-size: 0.9rem;
+  color: var(--gold-300);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .roulette-wheel__number--winning,
+  .roulette-table__cell--winning,
+  .roulette-table__zero--winning {
+    animation: none;
+  }
+}
+
+/* ---- Dice ---- */
+.dice-room .dice-controls__mode {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 4px;
+  font-size: 0.95rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  transition:
+    transform var(--dur-hover) var(--ease-snap),
+    border-color var(--dur-hover) var(--ease-snap),
+    background var(--dur-hover) var(--ease-snap),
+    color var(--dur-hover) var(--ease-snap);
+}
+
+.dice-room .dice-controls__mode svg {
+  width: 22px;
+  height: 22px;
+}
+
+.dice-room .dice-controls__mode:active:not(:disabled) {
+  transform: translateY(1px) scale(0.98);
+}
+
+.dice-room .dice-controls__mode--active {
+  color: #fbe7b0;
+  box-shadow: 0 0 0 1px rgba(244, 220, 156, 0.35), 0 0 22px rgba(244, 220, 156, 0.18);
+}
+
+/* rolling: every die tumbles on its own rhythm */
+.dice-room .dice-face-wrap--rolling {
+  animation: dice-tumble 420ms var(--ease-snap) infinite;
+}
+
+.dice-room .dice-face-wrap--rolling:nth-child(3n + 1) {
+  animation-duration: 380ms;
+  animation-delay: -90ms;
+}
+
+.dice-room .dice-face-wrap--rolling:nth-child(3n + 2) {
+  animation-duration: 460ms;
+  animation-delay: -210ms;
+}
+
+.dice-room .dice-face-wrap--rolling .dice-face__value {
+  opacity: 0;
+}
+
+@keyframes dice-tumble {
+  0% {
+    transform: none;
+  }
+  25% {
+    transform: translate(2px, -7px) rotate(14deg);
+  }
+  50% {
+    transform: translate(-1px, -2px) rotate(-9deg) scale(0.95);
+  }
+  75% {
+    transform: translate(-2px, -5px) rotate(10deg);
+  }
+  100% {
+    transform: none;
+  }
+}
+
+/* settled: dice land left to right with a small overshoot */
+.dice-room .dice-face-wrap:not(.dice-face-wrap--rolling) {
+  animation: dice-land 420ms var(--ease-out-back) both;
+}
+
+.dice-room .dice-face-wrap:nth-child(2) { animation-delay: 25ms; }
+.dice-room .dice-face-wrap:nth-child(3) { animation-delay: 50ms; }
+.dice-room .dice-face-wrap:nth-child(4) { animation-delay: 75ms; }
+.dice-room .dice-face-wrap:nth-child(5) { animation-delay: 100ms; }
+.dice-room .dice-face-wrap:nth-child(6) { animation-delay: 125ms; }
+.dice-room .dice-face-wrap:nth-child(7) { animation-delay: 150ms; }
+.dice-room .dice-face-wrap:nth-child(8) { animation-delay: 175ms; }
+.dice-room .dice-face-wrap:nth-child(9) { animation-delay: 200ms; }
+.dice-room .dice-face-wrap:nth-child(10) { animation-delay: 225ms; }
+
+@keyframes dice-land {
+  0% {
+    transform: translateY(-10px) scale(1.12) rotate(-6deg);
+  }
+  100% {
+    transform: none;
+  }
+}
+
+.dice-room .dice-face {
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.7),
+    inset 0 -3px 0 rgba(150, 120, 70, 0.25),
+    0 10px 20px rgba(0, 0, 0, 0.3);
+}
+
+.dice-room .dice-result {
+  width: min(460px, 92%);
+  margin-left: auto;
+  margin-right: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dice-room .dice-face-wrap,
+  .dice-room .dice-face-wrap--rolling {
+    animation: none;
+  }
+}
+
+/* ---- Mines ---- */
+.mines-room .mines-board {
+  width: min(560px, 100%);
+  margin: 22px auto 0;
+  gap: 10px;
+  perspective: 900px;
+}
+
+.mines-room .mines-cell {
+  transition:
+    transform var(--dur-hover) var(--ease-snap),
+    border-color var(--dur-hover) var(--ease-snap),
+    box-shadow var(--dur-hover) var(--ease-snap);
+}
+
+.mines-room .mines-cell:not(:disabled):hover {
+  transform: translateY(-3px);
+}
+
+.mines-room .mines-cell:not(:disabled):active {
+  transform: translateY(0) scale(0.96);
+  transition-duration: var(--dur-press);
+}
+
+/* revealing a tile flips it over, then the art pops */
+.mines-room .mines-cell--safe,
+.mines-room .mines-cell--mine {
+  animation: mines-flip 380ms var(--ease-out-back) both;
+}
+
+.mines-room .mines-cell__content {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 2px;
+}
+
+.mines-cell__art {
+  width: 56%;
+  height: auto;
+  filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.4));
+  animation: mines-art-pop 360ms var(--ease-out-back) 160ms both;
+}
+
+.mines-cell__mult {
+  font-family: var(--font-money);
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #b9ffd9;
+}
+
+/* the mine you stepped on: flash + shake; the rest are shown quietly */
+.mines-room .mines-cell--hit {
+  animation:
+    mines-flip 300ms var(--ease-out-back) both,
+    mines-hit-shake 420ms ease 300ms;
+  box-shadow:
+    0 0 0 2px rgba(255, 75, 85, 0.85),
+    0 0 30px rgba(255, 71, 87, 0.65);
+}
+
+.mines-room .mines-cell--hit .mines-cell__art {
+  width: 64%;
+}
+
+.mines-room .mines-cell--exposed {
+  opacity: 0.6;
+  box-shadow: none;
+  animation-delay: 380ms;
+}
+
+.mines-room .mines-cell--exposed:nth-child(3n) { animation-delay: 460ms; }
+.mines-room .mines-cell--exposed:nth-child(3n + 1) { animation-delay: 540ms; }
+
+.mines-room .mines-cell--exposed .mines-cell__art {
+  animation-delay: 560ms;
+}
+
+@keyframes mines-flip {
+  0% {
+    transform: rotateY(90deg) scale(0.9);
+  }
+  100% {
+    transform: none;
+  }
+}
+
+@keyframes mines-art-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.3) rotate(-12deg);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes mines-hit-shake {
+  20% { transform: translateX(-5px) rotate(-3deg); }
+  40% { transform: translateX(5px) rotate(3deg); }
+  60% { transform: translateX(-3px) rotate(-2deg); }
+  80% { transform: translateX(2px); }
+}
+
+.mines-room .round-result {
+  width: min(460px, 92%);
+  margin: 18px auto 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mines-room .mines-cell,
+  .mines-cell__art {
+    animation: none !important;
+  }
+}
+
+/* ---- Slots: drawn symbols ---- */
+.slots-machine__symbol-mark {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  font-size: 0;
+  filter: drop-shadow(0 5px 8px rgba(42, 22, 48, 0.28));
+}
+
+.slot-symbol {
+  width: min(82px, 74%);
+  height: auto;
+  max-height: 88%;
+}
+
+.slots-machine__reel--win .slot-symbol {
+  animation: slot-symbol-cheer 850ms var(--ease-out-back) 3;
+}
+
+@keyframes slot-symbol-cheer {
+  50% {
+    transform: scale(1.12) rotate(-4deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .slots-machine__reel--win .slot-symbol {
+    animation: none;
+  }
+}
+
+.slots-spin-button {
+  width: 100%;
+  margin-top: 14px;
+}
+
+.slot-symbol {
+  width: min(96px, 84%);
+  max-height: 92%;
+}
+
+/* ---- Plinko: the bucket row is positioned in % of the wrap, so the wrap must
+   be exactly as wide as the (height-capped) canvas or the buckets drift. ---- */
+.plinko-canvas-wrap {
+  width: fit-content;
+  max-width: 100%;
+}
+
+.plinko-room .roulette-stage__spin {
+  width: 100%;
+}
+
+/* ---- Roulette wheel v2 (SVG bowl + rotor) ---- */
+.roulette-room .roulette-wheel {
+  width: min(340px, 100%);
+  margin: 0 auto 22px;
+  container-type: inline-size;
+}
+
+.roulette-wheel__bowl,
+.roulette-wheel__rotor {
+  position: absolute;
+  inset: 0;
+}
+
+.roulette-wheel__bowl {
+  width: 100%;
+  height: 100%;
+}
+
+.roulette-wheel__rotor {
+  z-index: 1;
+  transform-origin: 50% 50%;
+  will-change: transform;
+}
+
+.roulette-wheel__rotor svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  filter: drop-shadow(0 0 6px rgba(0, 0, 0, 0.6));
+}
+
+.roulette-room .roulette-wheel::after {
+  z-index: 2;
+}
+
+.roulette-wheel__label {
+  fill: #fdf6e3;
+  font-family: 'Archivo', 'Segoe UI', sans-serif;
+  font-size: 12.5px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  text-anchor: middle;
+  dominant-baseline: middle;
+}
+
+.roulette-wheel__fret {
+  stroke: #d2a94e;
+  stroke-width: 1.3;
+}
+
+.roulette-wheel__ring {
+  stroke: #d2a94e;
+  stroke-width: 2.4;
+}
+
+.roulette-wheel__ring--thin {
+  stroke-width: 1.2;
+}
+
+.roulette-wheel__win {
+  fill: rgba(255, 230, 160, 0.32);
+  stroke: #fbe7b0;
+  stroke-width: 2.4;
+  animation: pocket-glow 1.4s ease-in-out infinite;
+}
+
+.roulette-room .roulette-wheel__ball {
+  z-index: 3;
+  width: 4.8cqw;
+  height: 4.8cqw;
+}
+
+.roulette-room .roulette-wheel__result {
+  width: 21cqw;
+  height: 21cqw;
+  margin: -10.5cqw 0 0 -10.5cqw;
+  font-size: 8cqw;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .roulette-wheel__win {
+    animation: none;
+  }
+}
+
+@media (min-width: 801px) {
+  .roulette-room .roulette-stage {
+    grid-template-columns: 320px minmax(0, 1fr);
+  }
+
+  .roulette-room .roulette-wheel {
+    max-width: 320px;
+    margin: 4px auto 0;
+  }
+}
+
+/* ==========================================================================
+   Phone widths
+   ========================================================================== */
+@media (max-width: 800px) {
+  /* compact top rail: name left, bankroll right, one row */
+  .hero {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 16px;
+  }
+
+  .hero__inner {
+    width: auto;
+    min-width: 0;
+    margin: 0;
+  }
+
+  .hero .eyebrow {
+    font-size: 0.8rem;
+    letter-spacing: 0.16em;
+    line-height: 1.35;
+  }
+
+  .hero .eyebrow::after {
+    max-width: 130px;
+    height: 6px;
+    margin-top: 6px;
+  }
+
+  .hero .balance-pill {
+    width: auto;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    box-shadow: none;
+  }
+
+  .hero .balance-pill__inner {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+    padding: 0;
+  }
+
+  .hero .balance-pill__label {
+    font-size: 0.6rem;
+  }
+
+  .hero .balance-pill strong {
+    font-size: 1.5rem;
+  }
+
+  /* roulette: the classic vertical board (1 2 3 / 4 5 6 / …) */
+  .roulette-room .roulette-table__numbers {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-rows: repeat(12, 40px);
+    grid-auto-flow: column;
+  }
+
+  .roulette-room .roulette-table__cell {
+    aspect-ratio: auto;
+    height: 40px;
+    font-size: 1rem;
+  }
+
+  .roulette-room .roulette-wheel {
+    width: min(320px, 100%);
+  }
+}
+
+@media (max-width: 800px) {
+  /* blackjack: shoe tucked in the corner, actions first and side by side */
+  .blackjack-table .blackjack-deck {
+    top: 12px;
+    right: 12px;
+    width: 40px;
+    height: 58px;
+  }
+
+  .blackjack-controls {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .blackjack-controls .action-row {
+    order: -1;
+  }
+
+}
+
+/* ---------- compositor-only versions of a few heavier animations ---------- */
+
+/* poker check ripple: fixed-size ring that scales, instead of growing width/height */
+.poker-seat__check-ring {
+  width: 72px;
+  height: 72px;
+}
+
+@keyframes poker-check-ring {
+  0% {
+    transform: translate(-50%, -50%) scale(0.17);
+    opacity: 0.65;
+  }
+
+  100% {
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 0;
+  }
+}
+
+/* slot win: the gold halo lives on a pseudo-element and only its opacity pulses */
+.slots-machine__reel--win {
+  position: relative;
+  animation: slots-win-pop 850ms var(--ease-snap) 3;
+}
+
+.slots-machine__reel--win::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow:
+    0 0 0 2px rgba(255, 201, 62, 0.9),
+    0 0 26px rgba(255, 201, 62, 0.55);
+  opacity: 0;
+  animation: slots-win-halo 850ms ease-in-out 3;
+}
+
+@keyframes slots-win-pop {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.06);
+  }
+}
+
+@keyframes slots-win-halo {
+  50% {
+    opacity: 1;
+  }
+}
+
+/* roulette winning pocket: pulse opacity rather than a filter on a spinning layer */
+.roulette-wheel__win {
+  animation: roulette-win-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes roulette-win-pulse {
+  0%,
+  100% {
+    opacity: 0.75;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .slots-machine__reel--win,
+  .slots-machine__reel--win::after,
+  .roulette-wheel__win {
+    animation: none;
+  }
+
+  .slots-machine__reel--win::after {
+    opacity: 1;
+  }
+}
+
+/* mid-size windows: the stage column is too narrow for wheel beside board,
+   so stack wheel, board, payouts */
+@media (min-width: 801px) and (max-width: 1179px) {
+  .roulette-room .roulette-stage {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "head"
+      "wheel"
+      "table"
+      "payouts";
+    grid-template-rows: auto;
+  }
+
+  .roulette-room .roulette-wheel {
+    max-width: 300px;
+    margin: 4px auto 0;
+  }
+}
+
+/* Hi-Lo: the deck card and the revealed card share one spot. Needs more
+   specificity than the shared `.playing-card { position: relative }`. */
+.hilo-card-stack .playing-card.hilo-card--base,
+.hilo-card-stack .playing-card.hilo-card--overlay {
+  position: absolute;
+  inset: 0;
+}
+
+/* ==========================================================================
+   Mines v2: one board size for every state, calmer loss sequence
+   ========================================================================== */
+.mines-room .mines-stage {
+  padding: 34px;
+}
+
+/* square board that always fits the stage and the viewport */
+.mines-room .mines-board,
+.mines-room .mines-board.mines-board--idle {
+  position: relative;
+  width: min(100%, 440px, 56vh);
+  max-width: none;
+  aspect-ratio: 1;
+  margin: 18px auto 4px;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-rows: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.mines-room .mines-cell {
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* before a round: a dimmed ghost field with the prompt laid over it */
+.mines-room .mines-cell--idle {
+  display: block;
+  opacity: 0.42;
+  box-shadow: inset 0 1px 0 rgba(62, 232, 255, 0.1);
+  pointer-events: none;
+}
+
+.mines-room .mines-board--idle .mines-board__empty {
+  position: absolute;
+  inset: 50% auto auto 50%;
+  transform: translate(-50%, -50%);
+  width: max-content;
+  max-width: 86%;
+  white-space: nowrap;
+  min-height: 0;
+  margin: 0;
+  padding: 12px 20px;
+  border: 1px solid rgba(255, 201, 62, 0.35);
+  border-radius: 999px;
+  background: rgba(10, 13, 24, 0.88);
+  color: #ffe9b3;
+  font-size: 0.78rem;
+  letter-spacing: 0.1em;
+  text-align: center;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+}
+
+/* reveal: a clean quarter-turn flip, no overshoot wobble */
+.mines-room .mines-cell--safe,
+.mines-room .mines-cell--mine {
+  animation: mines-flip 260ms var(--ease-snap) both;
+}
+
+/* the mine you hit: flips, then one red flash and a short shake */
+.mines-room .mines-cell--hit {
+  position: relative;
+  z-index: 2;
+  animation:
+    mines-flip 240ms var(--ease-snap) both,
+    mines-hit-shake 340ms ease-out 240ms;
+  box-shadow: 0 0 0 2px rgba(255, 75, 85, 0.85);
+}
+
+.mines-room .mines-cell--hit::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow: 0 0 34px rgba(255, 71, 87, 0.75);
+  opacity: 0;
+  animation: mines-hit-flash 900ms ease-out 200ms both;
+}
+
+/* the other mines fade in quietly, in board order, once the hit has landed
+   (.mines-board raises specificity over the older :nth-child delays) */
+.mines-room .mines-board .mines-cell--exposed {
+  box-shadow: none;
+  animation: mines-expose 320ms var(--ease-snap) both;
+  animation-delay: calc(420ms + var(--i, 0) * 14ms);
+}
+
+.mines-room .mines-cell--exposed .mines-cell__art {
+  animation: none;
+}
+
+@keyframes mines-flip {
+  0% {
+    transform: rotateY(90deg);
+  }
+  100% {
+    transform: none;
+  }
+}
+
+@keyframes mines-hit-shake {
+  25% { transform: translateX(-4px); }
+  50% { transform: translateX(4px); }
+  75% { transform: translateX(-2px); }
+  100% { transform: none; }
+}
+
+@keyframes mines-hit-flash {
+  15% { opacity: 1; }
+  100% { opacity: 0.35; }
+}
+
+@keyframes mines-expose {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  to {
+    opacity: 0.55;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mines-room .mines-cell--hit::after {
+    animation: none;
+    opacity: 0.6;
+  }
+
+  .mines-room .mines-cell--exposed {
+    opacity: 0.55;
+  }
+}
+
+/* tile art is sized against the full tile, not a shrink-wrapped column */
+.mines-room .mines-cell {
+  position: relative;
+  padding: 0;
+}
+
+.mines-room .mines-cell__content {
+  position: absolute;
+  inset: 0;
+  padding: 0;
+  grid-template-columns: 100%;
+  justify-items: center;
+}
+
+.mines-room .mines-cell__art {
+  width: 54%;
+}
+
+.mines-room .mines-cell--hit .mines-cell__art {
+  width: 62%;
+}
+
+/* keep both slot labels one line so the current card and the deck line up */
+.hilo-room .hilo-card-slot .table-spot__label {
+  white-space: nowrap;
+}
+
+/* roulette bet card: line-drawn delete icon, quiet until hovered */
+.roulette-delete {
+  top: 14px;
+  right: 14px;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid rgba(247, 228, 172, 0.16);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(248, 235, 194, 0.6);
+  transition:
+    color var(--dur-hover) var(--ease-snap),
+    background-color var(--dur-hover) var(--ease-snap),
+    border-color var(--dur-hover) var(--ease-snap),
+    transform var(--dur-press) var(--ease-snap);
+}
+
+.roulette-delete svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.roulette-delete:not(:disabled):hover,
+.roulette-delete:focus-visible {
+  color: #ff8fa3;
+  border-color: rgba(255, 122, 149, 0.5);
+  background: rgba(122, 18, 35, 0.32);
+}
+
+.roulette-delete:not(:disabled):active {
+  transform: scale(0.92);
+}
+
+/* ==========================================================================
+   Poker motion v2: flights are measured in JS (deal, bets, folds, pot to
+   winner); CSS only handles flips, the turn glow and the check knock.
+   ========================================================================== */
+
+/* bet chips are placed and flown by JS; drop the old per-seat offsets */
+.poker-felt .poker-pot-animation {
+  top: 0;
+  left: 0;
+  right: auto;
+  bottom: auto;
+  margin: 0;
+  animation: none;
+  will-change: transform, opacity;
+}
+
+.poker-pot-flyer {
+  position: absolute;
+  z-index: 3;
+  margin: 0;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
+/* the pot empties once it has been pushed to the winner */
+.poker-felt--showdown .poker-center > .poker-pot-chips {
+  opacity: 0;
+  transition: opacity 120ms linear 560ms;
+}
+
+.poker-pot-chips--pulse {
+  transform: none;
+}
+
+/* folds are flown by JS; keep the pair where it was, no snap together */
+.poker-felt .poker-seat__cards--folding {
+  gap: 6px;
+}
+
+.poker-felt .poker-seat__cards--folding .poker-seat__card {
+  animation: none !important;
+  margin-left: 0 !important;
+}
+
+/* your hand is dealt by JS from the pot */
+.poker-your-hand .poker-deal {
+  animation: none;
+}
+
+/* showdown: opponents' cards turn over where they lie */
+.poker-seat__cards {
+  perspective: 600px;
+}
+
+.poker-seat__card--reveal {
+  transform-origin: 50% 50%;
+  animation: poker-card-flip 340ms var(--ease-snap) backwards;
+}
+
+@keyframes poker-card-flip {
+  from {
+    transform: rotateY(90deg);
+  }
+}
+
+/* board cards: a quarter-turn flip as they land, no wobble */
+.poker-community__card--reveal {
+  transform-origin: 50% 50%;
+  animation: poker-board-flip 420ms var(--ease-snap) backwards;
+}
+
+@keyframes poker-board-flip {
+  0% {
+    opacity: 0;
+    transform: translateY(-8px) rotateY(90deg);
+  }
+  35% {
+    opacity: 1;
+  }
+}
+
+/* whose turn: border eases over, then a slow breathing glow */
+.poker-seat__badge {
+  transition:
+    border-color var(--dur-enter) var(--ease-snap),
+    box-shadow var(--dur-enter) var(--ease-snap);
+}
+
+.poker-seat--active .poker-seat__badge::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow: 0 0 22px rgba(62, 232, 255, 0.45);
+  opacity: 0;
+  animation: poker-turn-breathe 1.8s ease-in-out infinite;
+}
+
+@keyframes poker-turn-breathe {
+  50% {
+    opacity: 1;
+  }
+}
+
+/* check: two quick knocks and a short ripple, done in under a second */
+.poker-seat__check-ring--one {
+  animation: poker-check-ring 720ms ease-out forwards;
+}
+
+.poker-seat__check-ring--two {
+  animation: poker-check-ring 720ms ease-out 140ms forwards;
+}
+
+.poker-seat__badge--checking {
+  animation: poker-check-knock 180ms ease-in-out 2;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .poker-seat__card--reveal,
+  .poker-community__card--reveal,
+  .poker-seat--active .poker-seat__badge::after,
+  .poker-seat__check-ring,
+  .poker-seat__badge--checking {
+    animation: none !important;
+  }
+}
+
+/* Poker used to bleed to the full window width, which overflowed (and got
+   clipped by) the 1560px app frame on wide windows. Fill the frame instead. */
+@media (min-width: 801px) {
+  .shell .games-panel--poker {
+    width: auto;
+    margin-left: 0;
+    margin-right: 0;
+  }
+}
+
+/* ==========================================================================
+   Poker desktop layout: table on the left sized to the window, everything you
+   act on (room code, blinds, buy-in, your hand, actions) in a sidebar.
+   ========================================================================== */
+@media (min-width: 901px) {
+  /* the room scrolls inside the panel instead of being clipped by it */
+  .shell .games-panel--poker .poker-room {
+    flex: 1 1 auto;
+    min-height: 0;
+    margin-top: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .poker-room .poker-stage {
+    padding: 16px 20px 20px;
+  }
+
+  .poker-room .poker-entry {
+    margin-top: 12px;
+  }
+
+  .poker-room .poker-table {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 264px;
+    /* sidebar rows hug their content; the last row soaks up the table height */
+    grid-template-rows: repeat(8, auto) 1fr;
+    column-gap: 18px;
+    row-gap: 12px;
+    align-items: start;
+    min-height: 0;
+    margin-top: 0;
+  }
+
+  .poker-room .poker-table > .poker-felt {
+    grid-column: 1;
+    grid-row: 1 / -1;
+    margin: 0;
+    min-height: 0;
+    height: clamp(420px, calc(100vh - 312px), 720px);
+    padding: 0;
+    border-radius: 170px;
+  }
+
+  .poker-room .poker-table > .poker-felt::after {
+    border-radius: 150px;
+  }
+
+  .poker-room .poker-table > :not(.poker-felt) {
+    grid-column: 2;
+    position: static;
+    inset: auto;
+    width: auto;
+    min-width: 0;
+    margin: 0;
+  }
+
+  .poker-room .poker-code strong {
+    margin-top: 4px;
+    font-size: 2rem;
+  }
+
+  .poker-room .poker-code,
+  .poker-room .poker-buyin {
+    padding: 14px 16px;
+  }
+
+  .poker-room .poker-your-hand__cards {
+    justify-content: center;
+  }
+
+  /* actions stack in the sidebar: summary, then Fold / Check, then raise */
+  .poker-room .poker-controls {
+    grid-template-columns: 1fr;
+    gap: 12px;
+    max-width: none;
+  }
+
+  .poker-room .poker-controls__actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .poker-room .poker-controls__raise-card {
+    grid-column: 1 / -1;
+  }
+
+  .poker-room .poker-controls__raise input,
+  .poker-room .poker-controls__raise .bet-entry__apply {
+    min-height: 48px;
+  }
+
+  /* seats sit at fractions of the felt, so any table height works */
+  .poker-room .poker-seat {
+    width: 136px;
+  }
+
+  .poker-room .poker-seat__badge {
+    padding: 10px 12px;
+  }
+
+  .poker-room .poker-seat--1 {
+    top: 4%;
+    bottom: auto;
+  }
+
+  .poker-room .poker-seat--4 {
+    top: auto;
+    bottom: 4%;
+  }
+
+  .poker-room .poker-seat--2,
+  .poker-room .poker-seat--6 {
+    top: 25%;
+    bottom: auto;
+  }
+
+  .poker-room .poker-seat--3,
+  .poker-room .poker-seat--5 {
+    top: auto;
+    bottom: 25%;
+  }
+
+  .poker-room .poker-seat--2,
+  .poker-room .poker-seat--3 {
+    right: 4%;
+    left: auto;
+  }
+
+  .poker-room .poker-seat--5,
+  .poker-room .poker-seat--6 {
+    left: 4%;
+    right: auto;
+  }
+
+  /* the middle of the table stays clear of the side seats */
+  /* exactly the gap between the side seats (4% inset + 136px seat each side) */
+  .poker-room .poker-center {
+    width: min(360px, calc(92% - 288px));
+    transform: translate(-50%, -44%);
+  }
+
+  .poker-room .table-center__rules {
+    line-height: 1.5;
+  }
+
+  .poker-room .poker-community {
+    gap: 5px;
+    margin-top: 12px;
+    flex-wrap: nowrap;
+  }
+
+  .poker-room .playing-card.poker-community__card {
+    width: 48px;
+    height: 70px;
+    flex: 0 0 48px;
+    padding: 0;
+    border-radius: 9px;
+  }
+
+  .poker-room .poker-start {
+    margin-top: 14px;
+  }
+}
+
+/* short windows: during a hand the pot line and board need the middle of the
+   table, so the decorative title steps aside */
+@media (min-width: 901px) and (max-height: 820px) {
+  .poker-room .poker-felt--live .table-center__title {
+    display: none;
+  }
+}
+
+/* keep the poker sidebar inside one screen on laptop heights */
+@media (min-width: 901px) {
+  .poker-room .poker-your-hand {
+    padding: 12px 14px;
+  }
+
+  .poker-room .poker-your-hand__cards {
+    margin-top: 8px;
+  }
+
+  .poker-room .playing-card.poker-your-hand__card {
+    width: 60px;
+    height: 86px;
+  }
+
+  .poker-room .poker-controls__summary {
+    padding: 12px 14px;
+  }
+
+  .poker-room .poker-cashout {
+    min-height: 40px;
+    margin-top: 10px;
+    padding-block: 8px;
+  }
+
+  .poker-room .poker-controls__actions .action-button {
+    min-height: 48px;
+  }
+
+  .poker-room .poker-controls__raise-card {
+    padding: 10px 12px;
+    gap: 6px;
+  }
+
+  .poker-room .poker-controls__raise-hint {
+    display: none;
+  }
+
+  .poker-room .poker-controls__raise input,
+  .poker-room .poker-controls__raise .bet-entry__apply {
+    min-height: 42px;
+  }
+}
+
+/* ---------- Poker: burn + deal + flip for board cards ---------- */
+/* the board choreography is driven by JS now */
+.poker-community__card--reveal {
+  animation: none;
+}
+
+.poker-board-ghost {
+  position: absolute;
+  z-index: 4;
+  margin: 0;
+  padding: 0;
+  pointer-events: none;
+  backface-visibility: hidden;
+  box-shadow: 0 10px 18px rgba(0, 0, 0, 0.35);
+  will-change: transform, opacity;
+}
+
+/* ---------- Poker: a check you can actually see ---------- */
+/* two knuckle taps on the felt */
+.poker-seat__badge--checking {
+  animation: poker-check-tap 300ms var(--ease-snap) 2;
+}
+
+@keyframes poker-check-tap {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+  }
+  35% {
+    transform: translateY(4px) scale(0.97);
+  }
+}
+
+/* keep centred seats centred while they tap */
+.poker-seat--1 .poker-seat__badge--checking,
+.poker-seat--4 .poker-seat__badge--checking {
+  transform-origin: 50% 100%;
+}
+
+/* bigger gold rings rolling out across the felt */
+.poker-seat__check-ripple {
+  z-index: -1;
+}
+
+.poker-seat__check-ring {
+  width: 150px;
+  height: 150px;
+  border: 3px solid rgba(255, 214, 120, 0.85);
+  box-shadow: 0 0 18px rgba(255, 201, 62, 0.35);
+}
+
+.poker-seat__check-ring--one {
+  animation: poker-check-ring 900ms cubic-bezier(0.2, 0, 0, 1) forwards;
+}
+
+.poker-seat__check-ring--two {
+  animation: poker-check-ring 900ms cubic-bezier(0.2, 0, 0, 1) 300ms forwards;
+}
+
+@keyframes poker-check-ring {
+  0% {
+    transform: translate(-50%, -50%) scale(0.12);
+    opacity: 0.9;
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 0;
+  }
+}
+
+/* the word itself pops up over the seat, hangs, then floats off */
+.poker-seat__action-pop {
+  position: absolute;
+  left: 50%;
+  top: -8px;
+  z-index: 5;
+  padding: 5px 14px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #ffe7a3 0%, #e0aa3e 100%);
+  color: #2a1a06;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  box-shadow:
+    0 8px 18px rgba(0, 0, 0, 0.4),
+    0 0 0 1px rgba(255, 245, 210, 0.5) inset;
+  pointer-events: none;
+  animation: poker-action-pop 1400ms var(--ease-snap) forwards;
+}
+
+@keyframes poker-action-pop {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -40%) scale(0.5);
+  }
+  14% {
+    opacity: 1;
+    transform: translate(-50%, -100%) scale(1.12);
+  }
+  24% {
+    transform: translate(-50%, -100%) scale(1);
+  }
+  78% {
+    opacity: 1;
+    transform: translate(-50%, -100%) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -150%) scale(0.96);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .poker-seat__action-pop {
+    animation: none;
+    transform: translate(-50%, -100%);
+  }
+}
+
+/* check ripples start on the seat's own outline and roll outward, so nothing
+   draws over the player's name */
+.poker-seat__check-ripple {
+  inset: 0;
+  width: auto;
+  height: auto;
+  transform: none;
+  border-radius: inherit;
+}
+
+.poker-seat__check-ring {
+  inset: -2px;
+  width: auto;
+  height: auto;
+  border-radius: inherit;
+  border-width: 3px;
+}
+
+@keyframes poker-check-ring {
+  0% {
+    transform: scale(1);
+    opacity: 0.95;
+  }
+  100% {
+    transform: scale(1.45);
+    opacity: 0;
+  }
+}
+
+/* the burn/deal ghosts must float over the felt; the shared
+   `.playing-card { position: relative }` would drop them into the flow */
+.poker-felt > .playing-card.poker-board-ghost {
+  position: absolute;
+}
+
+/* ---------- Poker: table talk ---------- */
+/* seat tags: colour says what kind of move it was */
+.poker-seat__action-pop--call {
+  background: linear-gradient(180deg, #bff3ff 0%, #4fc3e8 100%);
+  color: #06212b;
+}
+
+.poker-seat__action-pop--bet,
+.poker-seat__action-pop--raise {
+  background: linear-gradient(180deg, #ffd1a1 0%, #f0803c 100%);
+  color: #2b1003;
+}
+
+.poker-seat__action-pop--allin {
+  background: linear-gradient(180deg, #ff9aa6 0%, #e0283f 100%);
+  color: #fff4f5;
+}
+
+.poker-seat__action-pop--fold {
+  background: linear-gradient(180deg, #d7d9de 0%, #8c919c 100%);
+  color: #1b1d22;
+}
+
+@keyframes poker-banner-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.92);
+  }
+}
+
+/* running log for the hand, newest on top */
+.poker-log {
+  padding: 12px 14px;
+  border: 1px solid rgba(247, 228, 172, 0.18);
+  border-radius: 20px;
+  background: rgba(19, 13, 9, 0.76);
+}
+
+.poker-log__list {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  max-height: 168px;
+  overflow-y: auto;
+}
+
+.poker-log__item {
+  position: relative;
+  padding: 4px 0 4px 14px;
+  color: rgba(248, 235, 194, 0.82);
+  font-size: 0.84rem;
+  line-height: 1.3;
+}
+
+.poker-log__item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.62em;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #e0aa3e;
+}
+
+.poker-log__item:first-child {
+  color: #fff3cf;
+  font-weight: 700;
+  animation: poker-banner-in 300ms var(--ease-snap) both;
+}
+
+.poker-log__item--call::before { background: #4fc3e8; }
+.poker-log__item--bet::before,
+.poker-log__item--raise::before { background: #f0803c; }
+.poker-log__item--allin::before { background: #e0283f; }
+.poker-log__item--fold::before { background: #8c919c; }
+.poker-log__item--street::before { background: #f7e4ac; }
+.poker-log__item--win::before { background: #ffc93e; box-shadow: 0 0 8px rgba(255, 201, 62, 0.8); }
+.poker-log__item--info::before { background: rgba(247, 228, 172, 0.4); }
+
+/* in the sidebar the log sits under your actions */
+@media (min-width: 901px) {
+  .poker-room .poker-table > .poker-log {
+    order: 2;
+  }
+
+  .poker-room .poker-log__list {
+    max-height: 132px;
+  }
+}
+
+@media (max-width: 900px) {
+  .poker-log {
+    margin-top: 14px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .poker-log__item:first-child {
+    animation: none;
+  }
+}
+
+/* narrower tables: all five board cards stay on one row */
+.poker-community {
+  flex-wrap: nowrap;
+}
+
+@media (max-width: 900px) {
+  .poker-community {
+    gap: 8px;
+  }
+
+  .playing-card.poker-community__card {
+    width: 58px;
+    height: 84px;
+    flex: 0 0 58px;
+    padding: 0;
+    border-radius: 10px;
+  }
+}
+
+/* ---------- Developer access: Google sign-in ---------- */
+.dev-auth__note {
+  margin-top: 6px;
+}
+
+.action-button.dev-auth__google {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.dev-auth__mark {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  padding: 3px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-sizing: content-box;
 }

@@ -1,17 +1,30 @@
-import { useEffect, useLayoutEffect, useRef, useState, type SetStateAction } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type SetStateAction } from 'react'
 import { createPortal } from 'react-dom'
 import { collection, deleteDoc, doc, getDoc, onSnapshot, setDoc } from 'firebase/firestore'
-import { firebaseConfigError, firestore, isFirebaseConfigured } from './firebase'
+import {
+  DEVELOPER_EMAIL,
+  firebaseConfigError,
+  firestore,
+  isFirebaseConfigured,
+  signInAsDeveloper,
+  signOutDeveloper,
+  watchDeveloperSession,
+} from './firebase'
 import PlinkoBoard from './components/PlinkoBoard'
-import ChickenScene, { type ChickenStatus } from './components/ChickenScene'
+import ChickenRoad, { type ChickenStatus } from './components/ChickenRoad'
+import CardFace from './components/CardFace'
+import { GemIcon, MineIcon } from './components/MinesIcons'
+import SlotSymbol from './components/SlotSymbol'
+import RouletteWheel from './components/RouletteWheel'
 import JetstreamBoard, { type JetstreamStatus } from './components/JetstreamBoard'
 import {
   formatMultiplier as formatJetMultiplier,
-  generateRound as generateJetRound,
-  rollJetHop,
-  JET_CARRIERS,
-  JET_FLIGHT_MS,
-  type JetRound,
+  generateFlight as generateJetFlight,
+  JET_LAND_CHANCE,
+  JET_SPEEDS,
+  JET_SPEED_ORDER,
+  type JetFlight,
+  type JetSpeed,
 } from './components/jetstreamLogic'
 import {
   CHICKEN_DIFFICULTIES,
@@ -144,6 +157,93 @@ const ROULETTE_WHEEL_GRADIENT = (() => {
     return `${color} ${start}deg ${end}deg`
   }).join(', ')})`
 })()
+
+// Roulette spin choreography. The wheel turns clockwise and decelerates while
+// the ball runs counter-clockwise on the outer track, spirals in, rattles, and
+// then rides the wheel to rest in the winning pocket. Everything is sampled up
+// front into Web Animations keyframes, so the spin never re-renders React.
+// radii as fractions of the wheel's half-width (see RouletteWheel geometry)
+const ROULETTE_TRACK_RADIUS = 0.88
+const ROULETTE_POCKET_RADIUS = 0.58
+
+type RouletteSpinPose = { wheel: number; ball: number; radius: number }
+
+// 50cqw is the wheel's half-width, so the ball scales with the wheel
+const rouletteBallTransform = (angle: number, radiusFrac: number) =>
+  `translate(-50%, -50%) rotate(${angle}deg) translateY(${(-radiusFrac * 50).toFixed(3)}cqw)`
+
+const runRouletteSpin = (
+  wheel: HTMLElement,
+  ball: HTMLElement,
+  from: RouletteSpinPose,
+  pocketAngle: number,
+  durationMs: number,
+): RouletteSpinPose => {
+  const w0 = from.wheel
+  const w1 = w0 + 720 + Math.random() * 300
+  const rel0 = from.ball - w0
+  let relEnd = pocketAngle
+  while (relEnd > rel0 - 1500) relEnd -= 360 // four-plus laps against the wheel
+
+  // tLand: ball reaches the pocket ring. Before it, a short spiral down off the
+  // track; after it, a few small decaying hops off the frets, then it rides the wheel.
+  const tLand = 0.7
+  const tSpiral = 0.14
+  const samples = Math.round(durationMs / 16)
+  const wheelFrames: Keyframe[] = []
+  const ballFrames: Keyframe[] = []
+  const easeOut = (t: number, p: number) => 1 - Math.pow(1 - t, p)
+
+  for (let i = 0; i <= samples; i += 1) {
+    const t = i / samples
+    const w = w0 + (w1 - w0) * easeOut(t, 2.6)
+    let rel: number
+    let radius: number
+    if (t < tLand) {
+      rel = rel0 + (relEnd - rel0) * easeOut(t / tLand, 2.2)
+    } else {
+      const s = ((t - tLand) * durationMs) / 1000 // seconds since landing
+      const decay = Math.exp(-s * 4.5)
+      rel = relEnd + 5 * decay * Math.sin(2 * Math.PI * 2.4 * s) // nudged a few degrees either way
+    }
+    if (t < tLand - tSpiral) {
+      radius = from.radius + (ROULETTE_TRACK_RADIUS - from.radius) * easeOut(Math.min(1, t / 0.06), 2)
+    } else if (t < tLand) {
+      const k = (t - (tLand - tSpiral)) / tSpiral
+      radius = ROULETTE_TRACK_RADIUS + (ROULETTE_POCKET_RADIUS - ROULETTE_TRACK_RADIUS) * k * k
+    } else {
+      const s = ((t - tLand) * durationMs) / 1000
+      radius = ROULETTE_POCKET_RADIUS + 0.045 * Math.exp(-s * 5) * Math.abs(Math.sin(2 * Math.PI * 2.4 * s))
+    }
+    wheelFrames.push({ transform: `rotate(${w}deg)` })
+    ballFrames.push({ transform: rouletteBallTransform(w + rel, radius) })
+  }
+
+  const end: RouletteSpinPose = {
+    wheel: w1 % 360,
+    ball: (((w1 + relEnd) % 360) + 360) % 360,
+    radius: ROULETTE_POCKET_RADIUS,
+  }
+  const wheelEnd = `rotate(${end.wheel}deg)`
+  const ballEnd = rouletteBallTransform(end.ball, end.radius)
+
+  const wheelAnim = wheel.animate(wheelFrames, { duration: durationMs, easing: 'linear', fill: 'forwards' })
+  const ballAnim = ball.animate(ballFrames, { duration: durationMs, easing: 'linear', fill: 'forwards' })
+  wheelAnim.onfinish = () => {
+    wheel.style.transform = wheelEnd
+    wheelAnim.cancel()
+  }
+  ballAnim.onfinish = () => {
+    ball.style.transform = ballEnd
+    ballAnim.cancel()
+  }
+  return end
+}
+
+const rouletteSpinTransforms = (pose: RouletteSpinPose) => ({
+  wheel: `rotate(${pose.wheel}deg)`,
+  ball: rouletteBallTransform(pose.ball, pose.radius),
+})
 
 const getRouletteBallAngleForPocket = (value: RoulettePocket) => {
   const sliceSize = 360 / ROULETTE_WHEEL_ORDER.length
@@ -301,6 +401,8 @@ type MinesTile = {
   id: number
   isMine: boolean
   revealed: boolean
+  hit?: boolean // the mine the player actually stepped on
+  multiplier?: number // multiplier earned by this safe pick
 }
 
 type DiceMode = 'lower' | 'higher'
@@ -342,6 +444,15 @@ type PokerGameState = {
   lastContributions: PokerContribution[]
   lastAction: string
   winnerMessage: string | null
+}
+
+type PokerAnnouncementKind = 'info' | 'check' | 'call' | 'bet' | 'raise' | 'fold' | 'allin' | 'street' | 'win'
+
+type PokerAnnouncement = {
+  id: string
+  text: string
+  kind: PokerAnnouncementKind
+  tag?: string
 }
 
 type PokerPendingStart = {
@@ -992,22 +1103,6 @@ const formatSignedPoints = (value: number) => {
   return `${value > 0 ? '+' : '-'}$${Math.abs(Math.round(value)).toLocaleString()}`
 }
 
-const verifyDevAccessCode = async (code: string) => {
-  const response = await fetch('/api/verify-dev-code', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ code }),
-  })
-
-  const payload = (await response.json().catch(() => null)) as { success?: boolean; error?: string } | null
-
-  if (!response.ok || !payload?.success) {
-    throw new Error(payload?.error || 'Unable to verify code')
-  }
-}
-
 const getScoreChangeLabel = (value: number) =>
   value === 0 ? 'Bankroll unchanged' : `Bankroll ${formatSignedPoints(value)}`
 
@@ -1119,14 +1214,6 @@ const SLOT_SYMBOL_LABELS: Record<SlotRegularSymbol, string> = {
   gem: 'GM',
   lotus: 'LT',
   moon: 'MN',
-}
-
-const SLOT_SYMBOL_ICONS: Record<SlotRegularSymbol, string> = {
-  dragon: '🐉',
-  crown: '👑',
-  gem: '💎',
-  lotus: '🪷',
-  moon: '🌙',
 }
 
 const SLOT_SYMBOL_POOL: SlotRegularSymbol[] = [
@@ -2235,6 +2322,18 @@ const getRoundResult = (
   return { message: summaries.join(' '), delta, payout }
 }
 
+// Google's four-colour "G", drawn inline for the sign-in buttons
+function GoogleMark() {
+  return (
+    <svg className="dev-auth__mark" viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+      <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z" />
+      <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z" />
+      <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z" />
+      <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z" />
+    </svg>
+  )
+}
+
 function App() {
   const ROULETTE_SPIN_DURATION_MS = 7000
   const TRACKED_CASINO_GAMES: CasinoTrackedGame[] = ['blackjack', 'roulette', 'hilo', 'mines', 'plinko', 'slots', 'dice', 'chicken', 'jetstream']
@@ -2294,6 +2393,9 @@ function App() {
   const [rouletteResult, setRouletteResult] = useState<RoundResult | null>(null)
   const [rouletteBallAngle, setRouletteBallAngle] = useState(0)
   const [rouletteIsSpinning, setRouletteIsSpinning] = useState(false)
+  const rouletteWheelRef = useRef<HTMLDivElement | null>(null)
+  const rouletteBallRef = useRef<HTMLDivElement | null>(null)
+  const rouletteSpinPoseRef = useRef<RouletteSpinPose>({ wheel: 0, ball: 0, radius: ROULETTE_TRACK_RADIUS })
   const [hiLoDeck, setHiLoDeck] = useState<Card[]>([])
   const [hiLoCurrentCard, setHiLoCurrentCard] = useState<Card | null>(null)
   const [hiLoUpcomingCard, setHiLoUpcomingCard] = useState<Card | null>(null)
@@ -2347,18 +2449,13 @@ function App() {
   }, [selectedGame])
   const [jetstreamStatus, setJetstreamStatus] = useState<JetstreamStatus>('idle')
   const [jetstreamBet, setJetstreamBet] = useState(0)
-  const [jetstreamRound, setJetstreamRound] = useState<JetRound | null>(null)
-  const [jetstreamCarrier, setJetstreamCarrier] = useState(0)
-  const [jetstreamSplashSegment, setJetstreamSplashSegment] = useState<number | null>(null)
-  const [jetstreamBusy, setJetstreamBusy] = useState(false)
-  const [jetstreamMessage, setJetstreamMessage] = useState('Set your bet and launch the seaplane.')
+  const [jetstreamSpeed, setJetstreamSpeed] = useState<JetSpeed>('normal')
+  const [jetstreamFlight, setJetstreamFlight] = useState<JetFlight | null>(null)
+  const [jetstreamMessage, setJetstreamMessage] = useState('Pick a speed, set your bet and press Play.')
   const [jetstreamResult, setJetstreamResult] = useState<JetstreamRound | null>(null)
   const [jetstreamHistory, setJetstreamHistory] = useState<JetstreamRound[]>([])
-  const jetstreamMultiplierRef = useRef<{ value: number }>({ value: 1 })
-  const jetstreamRoundRef = useRef<JetRound | null>(null)
-  const jetstreamCarrierRef = useRef(0)
-  const jetstreamBusyRef = useRef(false)
-  const jetstreamBetRef = useRef(0)
+  // the flight in the air and its stake; settled exactly once
+  const jetstreamPendingRef = useRef<{ flight: JetFlight; bet: number } | null>(null)
   const [slotsGrid, setSlotsGrid] = useState<SlotCell[][]>(() => createInitialSlotsGrid())
   const [slotsBonusGrid, setSlotsBonusGrid] = useState<(SlotCell | null)[][]>(() =>
     createSlotsBonusGridFromSpin(createInitialSlotsGrid()),
@@ -2427,6 +2524,10 @@ function App() {
     Array<{ id: string; seatIndex: number; chips: { color: string; label: string }[] }>
   >([])
   const [pokerPotPulse, setPokerPotPulse] = useState(false)
+  // what just happened at the table: a tag over the actor's seat and a running
+  // log for the hand
+  const [pokerActionPops, setPokerActionPops] = useState<Record<string, PokerAnnouncement>>({})
+  const [pokerHandLog, setPokerHandLog] = useState<PokerAnnouncement[]>([])
   const [pokerMessage, setPokerMessage] = useState(
     'Choose whether you want to create a table or join one with a room code.',
   )
@@ -2438,7 +2539,6 @@ function App() {
     return window.sessionStorage.getItem(DEV_MODE_SESSION_KEY) === 'true'
   })
   const [devModePromptOpen, setDevModePromptOpen] = useState(false)
-  const [devModeInput, setDevModeInput] = useState('')
   const [devModeError, setDevModeError] = useState('')
   const [devModeVerifying, setDevModeVerifying] = useState(false)
   const [settingsPlayerSearch, setSettingsPlayerSearch] = useState('')
@@ -2708,7 +2808,11 @@ function App() {
       )
     }
 
-    return <span className="slots-machine__symbol-mark">{SLOT_SYMBOL_ICONS[displayCell.symbol]}</span>
+    return (
+      <span className="slots-machine__symbol-mark">
+        <SlotSymbol symbol={displayCell.symbol} />
+      </span>
+    )
   }
 
   useEffect(() => {
@@ -2945,9 +3049,6 @@ function App() {
 
   useEffect(() => {
     const handleDevModeKeydown = (event: KeyboardEvent) => {
-      // Dev mode is checked by server.mjs, which only exists on Render. The static GitHub Pages build has no server.
-      if (import.meta.env.VITE_STATIC_HOST === 'pages') return
-
       const target = event.target as HTMLElement | null
 
       if (
@@ -2967,14 +3068,13 @@ function App() {
         if (devMode) {
           setDevMode(false)
           setDevModePromptOpen(false)
-          setDevModeInput('')
           setDevModeError('')
           setDevModeVerifying(false)
+          void signOutDeveloper()
           return
         }
 
         setDevModePromptOpen(true)
-        setDevModeInput('')
         setDevModeError('')
         setDevModeVerifying(false)
         return
@@ -2988,28 +3088,29 @@ function App() {
     }
   }, [devMode])
 
-  const handleSubmitDevModeCode = async () => {
-    if (!devModeInput.trim()) {
-      setDevModeError('Enter a code first')
-      return
-    }
-
+  // Developer mode is unlocked by signing in with Google as DEVELOPER_EMAIL.
+  const handleDeveloperSignIn = async () => {
     setDevModeVerifying(true)
     setDevModeError('')
 
     try {
-      await verifyDevAccessCode(devModeInput.trim())
-      setDevMode((currentMode) => !currentMode)
+      await signInAsDeveloper()
+      setDevMode(true)
       setDevModePromptOpen(false)
-      setDevModeInput('')
       setDevModeError('')
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to verify code'
-      setDevModeError(message)
+      setDevModeError(error instanceof Error ? error.message : 'Google sign-in failed. Try again.')
     } finally {
       setDevModeVerifying(false)
     }
   }
+
+  // a remembered dev session only counts while that Google account is signed in
+  useEffect(() => watchDeveloperSession((isDeveloper) => {
+    if (!isDeveloper) {
+      setDevMode(false)
+    }
+  }), [])
 
   const handleSavePlayerOptions = () => {
     if (playerProfile.nameLocked) {
@@ -3147,7 +3248,7 @@ function App() {
             return nextAnimations
           })
           delete pokerFoldAnimationTimeoutsRef.current[playerId]
-        }, 950)
+        }, 620)
       }
 
       if (!folded && previousPokerFoldStateRef.current[playerId]) {
@@ -3222,17 +3323,24 @@ function App() {
     pokerPotAnimationTimeoutsRef.current = [
       window.setTimeout(() => {
         setPokerPotAnimations([])
-      }, 880),
+      }, 720),
       window.setTimeout(() => {
         setPokerPotPulse(false)
       }, 640),
     ]
   }, [pokerGame, pokerSeats])
 
+  const pokerCheckActionIdRef = useRef<number | null>(null)
+
   useEffect(() => {
     if (!pokerGame || pokerGame.lastActionType !== 'check' || !pokerGame.lastActorId) {
       return
     }
+    // snapshots re-arrive for the same action; only knock once per check
+    if (pokerCheckActionIdRef.current === pokerGame.actionId) {
+      return
+    }
+    pokerCheckActionIdRef.current = pokerGame.actionId
 
     const playerId = pokerGame.lastActorId
     setPokerCheckAnimations((current) => ({ ...current, [playerId]: true }))
@@ -3248,8 +3356,426 @@ function App() {
         return nextAnimations
       })
       delete pokerCheckAnimationTimeoutsRef.current[playerId]
-    }, 3200)
+    }, 1500)
   }, [pokerGame])
+
+  // Table talk: turn each new action into a seat tag and a log line.
+  const pokerAnnounceRef = useRef<{
+    actionId: number | null
+    currentBet: number
+    street: PokerStreet | null
+    folded: Record<string, boolean>
+    activeSeatIndex: number
+    pot: number
+  }>({ actionId: null, currentBet: 0, street: null, folded: {}, activeSeatIndex: -1, pot: 0 })
+  const pokerPopTimeoutsRef = useRef<Record<string, number>>({})
+
+  useEffect(() => {
+    if (!pokerGame) {
+      pokerAnnounceRef.current = { actionId: null, currentBet: 0, street: null, folded: {}, activeSeatIndex: -1, pot: 0 }
+      setPokerHandLog([])
+      setPokerActionPops({})
+      return
+    }
+    const previous = pokerAnnounceRef.current
+    const actionId = pokerGame.actionId ?? 0
+    if (previous.actionId === actionId) {
+      return
+    }
+    const folded = Object.fromEntries(
+      Object.entries(pokerGame.players).map(([playerId, player]) => [playerId, player.folded]),
+    )
+    pokerAnnounceRef.current = {
+      actionId,
+      currentBet: pokerGame.currentBet,
+      street: pokerGame.street,
+      folded,
+      activeSeatIndex: pokerGame.activeSeatIndex,
+      pot: pokerGame.pot,
+    }
+    // joining mid-hand: start from here, don't replay
+    if (previous.actionId === null) {
+      return
+    }
+
+    const nameOf = (playerId: string | null) =>
+      pokerSeats.find((seat) => seat?.id === playerId)?.name ?? 'Someone'
+    const entries: PokerAnnouncement[] = []
+    const add = (text: string, kind: PokerAnnouncementKind, actorId?: string | null, tag?: string) => {
+      entries.push({ id: `${actionId}-${entries.length}`, text, kind, tag })
+      if (actorId && tag) {
+        const popId = `${actionId}-${actorId}`
+        setPokerActionPops((current) => ({ ...current, [actorId]: { id: popId, text, kind, tag } }))
+        window.clearTimeout(pokerPopTimeoutsRef.current[actorId])
+        pokerPopTimeoutsRef.current[actorId] = window.setTimeout(() => {
+          setPokerActionPops((current) => {
+            const next = { ...current }
+            delete next[actorId]
+            return next
+          })
+        }, 1600)
+      }
+    }
+
+    const type = pokerGame.lastActionType
+    const actorId = pokerGame.lastActorId
+    const actorName = nameOf(actorId)
+    const paid = pokerGame.lastContributions?.find((entry) => entry.playerId === actorId)?.amount ?? 0
+    const allIn = actorId ? Boolean(pokerGame.players[actorId]?.allIn) : false
+    const newHand = type === 'blind' || type === 'start'
+
+    if (newHand) {
+      setPokerHandLog([])
+      add(`New hand · blinds $${pokerSmallBlind} / $${pokerBigBlind}`, 'info')
+    } else if (type === 'check' && actorId) {
+      add(`${actorName} checks`, 'check', actorId, 'Check')
+    } else if (type === 'call' && actorId) {
+      add(
+        allIn ? `${actorName} calls $${paid} and is all in` : `${actorName} calls $${paid}`,
+        allIn ? 'allin' : 'call',
+        actorId,
+        allIn ? 'All in' : `Call $${paid}`,
+      )
+    } else if (type === 'raise' && actorId) {
+      const to = pokerGame.currentBet
+      const by = to - previous.currentBet
+      if (previous.currentBet <= 0) {
+        add(allIn ? `${actorName} bets $${to} — all in` : `${actorName} bets $${to}`, allIn ? 'allin' : 'bet', actorId, allIn ? 'All in' : `Bet $${to}`)
+      } else {
+        add(
+          `${actorName} raises to $${to} (+$${by})${allIn ? ' — all in' : ''}`,
+          allIn ? 'allin' : 'raise',
+          actorId,
+          allIn ? 'All in' : `Raise +$${by}`,
+        )
+      }
+    }
+
+    // folds are read from the players, so a fold that ends the hand still shows
+    if (!newHand) {
+      Object.entries(folded).forEach(([playerId, isFolded]) => {
+        if (isFolded && !previous.folded[playerId]) {
+          add(`${nameOf(playerId)} folds`, 'fold', playerId, 'Fold')
+        }
+      })
+    }
+
+    if (pokerGame.street !== previous.street && ['flop', 'turn', 'river'].includes(pokerGame.street)) {
+      const shown = pokerGame.street === 'flop' ? pokerGame.communityCards.slice(0, 3) : pokerGame.communityCards.slice(-1)
+      const label = pokerGame.street.charAt(0).toUpperCase() + pokerGame.street.slice(1)
+      add(`${label}: ${shown.map((card) => `${card.rank}${card.suit}`).join(' ')}`, 'street')
+    }
+
+    // the move that ended the hand is replaced by the result, so rebuild it from
+    // whose turn it was and what happened to the pot
+    if (type === 'showdown' && previous.street !== 'showdown') {
+      const closer = pokerSeats[previous.activeSeatIndex]
+      if (closer && !(folded[closer.id] && !previous.folded[closer.id])) {
+        const added = pokerGame.pot - previous.pot
+        if (added > 0) {
+          add(`${closer.name} calls $${added}`, 'call', closer.id, `Call $${added}`)
+        } else {
+          add(`${closer.name} checks`, 'check', closer.id, 'Check')
+        }
+      }
+    }
+
+    if (pokerGame.street === 'showdown' && previous.street !== 'showdown' && pokerGame.winnerMessage) {
+      add(pokerGame.winnerMessage.replace(/\.$/, ''), 'win')
+    }
+
+    if (entries.length === 0) {
+      return
+    }
+    const newestFirst = [...entries].reverse()
+    setPokerHandLog((current) => [...newestFirst, ...current].slice(0, 12))
+  }, [pokerGame, pokerSeats, pokerSmallBlind, pokerBigBlind])
+
+  // Poker motion. Every flight on the felt (deal, bet, fold, pot to the winner)
+  // is measured from the live layout, so it lands right at any table size.
+  const pokerShowdownRef = useRef<{ street: PokerStreet | null; chips: Record<string, number> }>({
+    street: null,
+    chips: {},
+  })
+
+  const getPokerFeltGeometry = () => {
+    const felt = document.querySelector('.poker-felt') as HTMLElement | null
+    if (!felt) {
+      return null
+    }
+    const potEl = felt.querySelector('.poker-pot-chips') as HTMLElement | null
+    const potBox = (potEl ?? felt).getBoundingClientRect()
+    const feltBox = felt.getBoundingClientRect()
+    return {
+      felt,
+      potEl,
+      pot: { x: potBox.left + potBox.width / 2, y: potBox.top + potBox.height / 2 },
+      // absolute children are placed against the felt's padding box
+      origin: { x: feltBox.left + felt.clientLeft, y: feltBox.top + felt.clientTop },
+    }
+  }
+
+  const getPokerCenter = (element: Element) => {
+    const box = element.getBoundingClientRect()
+    return { x: box.left + box.width / 2, y: box.top + box.height / 2 }
+  }
+
+  const pokerMotionReduced = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
+  // deal: fresh hole cards fly out from the pot, one card per seat per lap
+  useLayoutEffect(() => {
+    const geometry = pokerGame ? getPokerFeltGeometry() : null
+    if (!geometry) {
+      return
+    }
+    const groups = Array.from(
+      document.querySelectorAll<HTMLElement>('.poker-seat__cards, .poker-your-hand__cards'),
+    ).filter((group) =>
+      group.querySelector('.poker-seat__card.playing-card--back:not([data-dealt]), .poker-your-hand__card:not([data-dealt])'),
+    )
+    groups.forEach((group, groupIndex) => {
+      Array.from(
+        group.querySelectorAll<HTMLElement>('.poker-seat__card.playing-card--back, .poker-your-hand__card'),
+      ).forEach((card, cardIndex) => {
+        if (card.dataset.dealt) {
+          return
+        }
+        card.dataset.dealt = 'true'
+        if (pokerMotionReduced()) {
+          return
+        }
+        const from = getPokerCenter(card)
+        card.animate(
+          [
+            {
+              transform: `translate(${geometry.pot.x - from.x}px, ${geometry.pot.y - from.y}px) rotate(-14deg) scale(0.55)`,
+              opacity: 0,
+            },
+            { opacity: 1, offset: 0.2 },
+            { transform: 'none', opacity: 1 },
+          ],
+          {
+            duration: 440,
+            delay: (cardIndex * groups.length + groupIndex) * 80,
+            easing: 'cubic-bezier(0.2, 0, 0, 1)',
+            fill: 'backwards',
+          },
+        )
+      })
+    })
+  }, [pokerGame])
+
+  // board: each street burns a card (tossed face-down off to the side), then
+  // deals the new card(s) face-down to their spots and turns them over
+  const pokerBoardCountRef = useRef<number | null>(null)
+
+  useLayoutEffect(() => {
+    const count = pokerGame?.communityCards.length ?? 0
+    const previous = pokerBoardCountRef.current
+    pokerBoardCountRef.current = count
+    const geometry = getPokerFeltGeometry()
+    const cards = Array.from(document.querySelectorAll<HTMLElement>('.poker-community__card'))
+    const fresh = cards.filter((card) => !card.dataset.dealt)
+    fresh.forEach((card) => {
+      card.dataset.dealt = 'true'
+    })
+    // nothing new, joining mid-hand, or motion turned off: just show the board
+    if (!geometry || fresh.length === 0 || previous === null || count <= previous || pokerMotionReduced()) {
+      return
+    }
+
+    const board = document.querySelector('.poker-community') as HTMLElement | null
+    if (!board) {
+      return
+    }
+    const boardBox = board.getBoundingClientRect()
+    const firstBox = cards[0].getBoundingClientRect()
+    const cardW = firstBox.width
+    const cardH = firstBox.height
+    // the "deck" sits just off the left end of the board
+    const deck = { x: boardBox.left - cardW * 0.9, y: firstBox.top - cardH * 0.35 }
+
+    const makeBack = (left: number, top: number) => {
+      const back = document.createElement('div')
+      back.className = 'playing-card playing-card--back poker-community__card poker-board-ghost'
+      back.style.left = `${left - geometry.origin.x}px`
+      back.style.top = `${top - geometry.origin.y}px`
+      back.style.width = `${cardW}px`
+      back.style.height = `${cardH}px`
+      geometry.felt.appendChild(back)
+      return back
+    }
+
+    // 1. burn: off the deck, tossed down and away, gone
+    const burn = makeBack(deck.x, deck.y)
+    const burnAnim = burn.animate(
+      [
+        { transform: 'translate(0, 0) rotate(-6deg) scale(0.9)', opacity: 0 },
+        { transform: 'translate(0, 0) rotate(-6deg) scale(1)', opacity: 1, offset: 0.14, easing: 'cubic-bezier(0.4, 0, 0.7, 0.4)' },
+        { transform: `translate(${-cardW * 0.35}px, ${cardH * 0.7}px) rotate(-32deg) scale(0.9)`, opacity: 1, offset: 0.8 },
+        { transform: `translate(${-cardW * 0.4}px, ${cardH * 0.78}px) rotate(-34deg) scale(0.9)`, opacity: 0 },
+      ],
+      { duration: 560, easing: 'linear', fill: 'both' },
+    )
+    burnAnim.onfinish = () => burn.remove()
+    burnAnim.oncancel = () => burn.remove()
+
+    // 2. deal each new card face-down, then turn it over
+    fresh.forEach((card, index) => {
+      const slot = card.getBoundingClientRect()
+      const back = makeBack(slot.left, slot.top)
+      const dx = deck.x - slot.left
+      const dy = deck.y - slot.top
+      const delay = 380 + index * 170
+      const slide = 360
+      const halfFlip = 150
+      const backAnim = back.animate(
+        [
+          { transform: `perspective(600px) translate(${dx}px, ${dy}px) rotate(-6deg)`, opacity: 0 },
+          { transform: `perspective(600px) translate(${dx * 0.92}px, ${dy * 0.92}px) rotate(-5deg)`, opacity: 1, offset: 0.08, easing: 'cubic-bezier(0.2, 0, 0, 1)' },
+          { transform: 'perspective(600px) translate(0, 0) rotate(0deg) rotateY(0deg)', opacity: 1, offset: slide / (slide + halfFlip), easing: 'cubic-bezier(0.4, 0, 1, 1)' },
+          { transform: 'perspective(600px) translate(0, 0) rotate(0deg) rotateY(90deg)', opacity: 1 },
+        ],
+        { duration: slide + halfFlip, delay, fill: 'both' },
+      )
+      backAnim.onfinish = () => back.remove()
+      backAnim.oncancel = () => back.remove()
+      card.animate(
+        [
+          { transform: 'perspective(600px) rotateY(-90deg)', opacity: 0 },
+          { transform: 'perspective(600px) rotateY(-90deg)', opacity: 1, offset: 0.01, easing: 'cubic-bezier(0, 0, 0.2, 1)' },
+          { transform: 'perspective(600px) rotateY(8deg)', opacity: 1, offset: 0.75 },
+          { transform: 'perspective(600px) rotateY(0deg)', opacity: 1 },
+        ],
+        { duration: 260, delay: delay + slide + halfFlip, fill: 'backwards' },
+      )
+    })
+  }, [pokerGame?.communityCards.length])
+
+  // bets: each contribution's chips slide from the seat into the pot, which
+  // gives a small bump as they land
+  useLayoutEffect(() => {
+    const geometry = pokerPotAnimations.length > 0 ? getPokerFeltGeometry() : null
+    if (!geometry) {
+      return
+    }
+    let landed = false
+    geometry.felt.querySelectorAll<HTMLElement>('.poker-pot-animation[data-seat]:not([data-flown])').forEach((flyer) => {
+      flyer.dataset.flown = 'true'
+      const badge = geometry.felt.querySelector(`.poker-seat--${Number(flyer.dataset.seat) + 1} .poker-seat__badge`)
+      if (!badge || pokerMotionReduced()) {
+        flyer.style.visibility = 'hidden'
+        return
+      }
+      const seat = getPokerCenter(badge)
+      // start just off the seat, on the way to the pot
+      const start = { x: seat.x + (geometry.pot.x - seat.x) * 0.2, y: seat.y + (geometry.pot.y - seat.y) * 0.2 }
+      flyer.style.left = `${start.x - geometry.origin.x - flyer.offsetWidth / 2}px`
+      flyer.style.top = `${start.y - geometry.origin.y - flyer.offsetHeight / 2}px`
+      const dx = geometry.pot.x - start.x
+      const dy = geometry.pot.y - start.y
+      flyer.animate(
+        [
+          { transform: 'translate(0, 0) scale(0.7)', opacity: 0 },
+          { transform: `translate(${dx * 0.08}px, ${dy * 0.08}px) scale(1)`, opacity: 1, offset: 0.18 },
+          { transform: `translate(${dx}px, ${dy}px) scale(0.9)`, opacity: 1, offset: 0.9 },
+          { transform: `translate(${dx}px, ${dy}px) scale(0.9)`, opacity: 0 },
+        ],
+        { duration: 620, easing: 'cubic-bezier(0.3, 0, 0.2, 1)', fill: 'forwards' },
+      )
+      landed = true
+    })
+    if (landed && geometry.potEl) {
+      geometry.potEl.animate(
+        [{ transform: 'scale(1)' }, { transform: 'scale(1.14)', offset: 0.4 }, { transform: 'scale(1)' }],
+        { duration: 300, delay: 540, easing: 'ease-out' },
+      )
+    }
+  }, [pokerPotAnimations])
+
+  // folds: the two cards tip toward the middle of the table and fade
+  useLayoutEffect(() => {
+    const geometry = Object.keys(pokerFoldAnimations).length > 0 ? getPokerFeltGeometry() : null
+    if (!geometry || pokerMotionReduced()) {
+      return
+    }
+    geometry.felt
+      .querySelectorAll<HTMLElement>('.poker-seat__cards--folding .poker-seat__card:not([data-folded])')
+      .forEach((card) => {
+        card.dataset.folded = 'true'
+        const isSecond = card.previousElementSibling !== null
+        const from = getPokerCenter(card)
+        card.animate(
+          [
+            { transform: 'none', opacity: 1 },
+            {
+              transform: `translate(${(geometry.pot.x - from.x) * 0.35}px, ${(geometry.pot.y - from.y) * 0.35}px) rotate(${isSecond ? 16 : -16}deg) scale(0.85)`,
+              opacity: 0,
+            },
+          ],
+          { duration: 460, delay: isSecond ? 60 : 0, easing: 'cubic-bezier(0.4, 0, 1, 1)', fill: 'forwards' },
+        )
+      })
+  }, [pokerFoldAnimations])
+
+  // showdown: once the cards are up, the pot slides to the winner(s) and their
+  // seat glows gold
+  useLayoutEffect(() => {
+    const previous = pokerShowdownRef.current
+    const street = pokerGame?.street ?? null
+    if (street !== 'showdown') {
+      pokerShowdownRef.current = { street, chips: { ...pokerPlayerChips } }
+      return
+    }
+    if (previous.street === 'showdown' || previous.street === null) {
+      pokerShowdownRef.current = { ...previous, street }
+      return
+    }
+    pokerShowdownRef.current = { street, chips: { ...pokerPlayerChips } }
+
+    const geometry = getPokerFeltGeometry()
+    if (!geometry?.potEl || pokerMotionReduced()) {
+      return
+    }
+    let winnerIds = Object.keys(pokerPlayerChips).filter(
+      (playerId) => (pokerPlayerChips[playerId] ?? 0) > (previous.chips[playerId] ?? Number.POSITIVE_INFINITY),
+    )
+    if (winnerIds.length === 0 && pokerGame?.lastActorId) {
+      winnerIds = [pokerGame.lastActorId]
+    }
+    const potCenter = geometry.pot
+    winnerIds.forEach((winnerId) => {
+      const seatIndex = pokerSeats.findIndex((seat) => seat?.id === winnerId)
+      const badge = geometry.felt.querySelector(`.poker-seat--${seatIndex + 1} .poker-seat__badge`) as HTMLElement | null
+      if (seatIndex === -1 || !badge) {
+        return
+      }
+      const flyer = geometry.potEl!.cloneNode(true) as HTMLElement
+      flyer.className = 'poker-pot-chips poker-pot-flyer'
+      geometry.felt.appendChild(flyer)
+      flyer.style.left = `${potCenter.x - geometry.origin.x - flyer.offsetWidth / 2}px`
+      flyer.style.top = `${potCenter.y - geometry.origin.y - flyer.offsetHeight / 2}px`
+      const seat = getPokerCenter(badge)
+      const flight = flyer.animate(
+        [
+          { transform: 'translate(0, 0) scale(1)', opacity: 1 },
+          { transform: `translate(${seat.x - potCenter.x}px, ${seat.y - potCenter.y}px) scale(0.8)`, opacity: 1, offset: 0.88 },
+          { transform: `translate(${seat.x - potCenter.x}px, ${seat.y - potCenter.y}px) scale(0.8)`, opacity: 0 },
+        ],
+        { duration: 760, delay: 520, easing: 'cubic-bezier(0.3, 0, 0.2, 1)', fill: 'both' },
+      )
+      flight.onfinish = () => flyer.remove()
+      flight.oncancel = () => flyer.remove()
+      badge.animate(
+        [
+          { boxShadow: '0 0 0 0 rgba(255, 201, 62, 0)' },
+          { boxShadow: '0 0 0 5px rgba(255, 201, 62, 0.35), 0 0 34px rgba(255, 201, 62, 0.55)', offset: 0.35 },
+          { boxShadow: '0 0 0 0 rgba(255, 201, 62, 0)' },
+        ],
+        { duration: 1500, delay: 1180, easing: 'ease-out' },
+      )
+    })
+  }, [pokerGame, pokerPlayerChips, pokerSeats])
 
   const resetRound = () => {
     if (hiLoResolveTimeoutRef.current) {
@@ -3834,22 +4360,17 @@ function App() {
   }
 
   const handleVerifyCasinoStatsReset = async () => {
-    if (!casinoStatsResetInput.trim()) {
-      setCasinoStatsResetError('Enter a code first')
-      return
-    }
-
     setCasinoStatsResetVerifying(true)
     setCasinoStatsResetError('')
 
     try {
-      await verifyDevAccessCode(casinoStatsResetInput.trim())
+      await signInAsDeveloper()
       setCasinoStatsResetPromptOpen(false)
       setCasinoStatsResetConfirmOpen(true)
       setCasinoStatsResetInput('')
       setCasinoStatsResetError('')
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to verify code'
+      const message = error instanceof Error ? error.message : 'Google sign-in failed. Try again.'
       setCasinoStatsResetError(message)
     } finally {
       setCasinoStatsResetVerifying(false)
@@ -3996,18 +4517,10 @@ function App() {
   }
 
   const resetJetstreamRound = () => {
-    jetstreamBusyRef.current = false
-    jetstreamBetRef.current = 0
-    setJetstreamBusy(false)
-    jetstreamMultiplierRef.current.value = 1
-    jetstreamRoundRef.current = null
-    jetstreamCarrierRef.current = 0
     setJetstreamStatus('idle')
-    setJetstreamRound(null)
-    setJetstreamCarrier(0)
-    setJetstreamSplashSegment(null)
+    setJetstreamFlight(null)
     setJetstreamResult(null)
-    setJetstreamMessage('Set your bet and launch the seaplane.')
+    setJetstreamMessage('Pick a speed, set your bet and press Play.')
   }
 
   const handleOpenJetstream = () => {
@@ -4018,54 +4531,56 @@ function App() {
     setBetInputError('')
   }
 
-  // Attempt the hop onto `nextCarrier` (1-based). Survive → land on it; else splash.
-  const attemptJetHop = (nextCarrier: number) => {
-    const activeRound = jetstreamRoundRef.current
-    if (!activeRound || jetstreamBusyRef.current) {
+  const handleSelectJetSpeed = (speed: JetSpeed) => {
+    if (jetstreamStatus === 'flying') {
       return
     }
-    jetstreamBusyRef.current = true
-    setJetstreamBusy(true)
+    setJetstreamSpeed(speed)
+  }
 
-    if (rollJetHop(activeRound, nextCarrier)) {
-      jetstreamCarrierRef.current = nextCarrier
-      setJetstreamCarrier(nextCarrier)
-      const reached = activeRound.multipliers[nextCarrier - 1]
-      jetstreamMultiplierRef.current.value = reached
-      setJetstreamMessage(
-        nextCarrier >= JET_CARRIERS
-          ? `Final carrier! ${formatJetMultiplier(reached)} — land now.`
-          : `Carrier ${nextCarrier}: ${formatJetMultiplier(reached)}. Land or fly on.`,
-      )
-      window.setTimeout(() => {
-        jetstreamBusyRef.current = false
-        setJetstreamBusy(false)
-      }, JET_FLIGHT_MS)
-    } else {
-      jetstreamBusyRef.current = false
-      setJetstreamBusy(false)
-      const stake = jetstreamBetRef.current
-      setJetstreamSplashSegment(nextCarrier)
-      setJetstreamStatus('splashed')
-      const round: JetstreamRound = {
-        id: `jet-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        bet: stake,
-        multiplier: 0,
-        payout: 0,
-        net: roundMoney(-stake),
-        cashed: false,
-      }
-      applyPlayerDailyDelta(round.net)
-      applyCasinoDailyDelta(round.net)
-      applyCasinoGameDailyDelta('jetstream', round.net)
-      setJetstreamResult(round)
-      setJetstreamHistory((current) => [round, ...current].slice(0, 8))
-      setJetstreamMessage(`Splash! The plane went down before carrier ${nextCarrier}. You lose $${stake.toFixed(2)}.`)
+  // Pay out (or not) the flight in the air. Runs once per flight: when the
+  // board reports the landing/splash, or right away if the player leaves.
+  const settleJetstreamFlight = () => {
+    const pending = jetstreamPendingRef.current
+    if (!pending) {
+      return
+    }
+    jetstreamPendingRef.current = null
+    const { flight, bet: stake } = pending
+    const payout = roundMoney(stake * flight.payoutMultiplier)
+    const net = roundMoney(payout - stake)
+    const round: JetstreamRound = {
+      id: flight.id,
+      bet: stake,
+      multiplier: flight.payoutMultiplier,
+      payout,
+      net,
+      cashed: flight.landed,
+    }
+    if (payout > 0) {
+      setBankroll((currentBankroll) => currentBankroll + payout)
+    }
+    applyPlayerDailyDelta(net)
+    applyCasinoDailyDelta(net)
+    applyCasinoGameDailyDelta('jetstream', net)
+    setJetstreamResult(round)
+    setJetstreamHistory((current) => [round, ...current].slice(0, 8))
+    setJetstreamStatus(flight.landed ? 'landed' : 'splashed')
+    setJetstreamMessage(
+      flight.landed
+        ? `Landed at ${formatJetMultiplier(flight.payoutMultiplier)} — ${formatPoints(payout)} (+$${net.toFixed(2)}).`
+        : `Splash! The plane went into the sea. You lose $${stake.toFixed(2)}.`,
+    )
+  }
+
+  const handleJetstreamFinish = (flightId: string) => {
+    if (jetstreamPendingRef.current?.flight.id === flightId) {
+      settleJetstreamFlight()
     }
   }
 
   const handleLaunchJetstream = () => {
-    if (jetstreamStatus === 'flying') {
+    if (jetstreamStatus === 'flying' || jetstreamPendingRef.current) {
       return
     }
     if (!canPlaceBets) {
@@ -4077,60 +4592,24 @@ function App() {
       return
     }
 
-    const newRound = generateJetRound()
+    const flight = generateJetFlight(jetstreamSpeed)
     setBankroll((currentBankroll) => currentBankroll - bet)
-    jetstreamBusyRef.current = false
-    jetstreamBetRef.current = bet
-    jetstreamMultiplierRef.current.value = 1
-    jetstreamRoundRef.current = newRound
-    jetstreamCarrierRef.current = 0
-    setJetstreamBusy(false)
+    jetstreamPendingRef.current = { flight, bet }
     setJetstreamBet(bet)
-    setJetstreamRound(newRound)
-    setJetstreamCarrier(0)
-    setJetstreamSplashSegment(null)
+    setJetstreamFlight(flight)
     setJetstreamResult(null)
     setJetstreamStatus('flying')
     setBetInputError('')
-    setJetstreamMessage('Taking off…')
-    // launch straight into the first hop (after the reset commits)
-    window.setTimeout(() => attemptJetHop(1), 30)
+    setJetstreamMessage(`${JET_SPEEDS[jetstreamSpeed].label} flight in the air — it has to reach the carrier.`)
   }
 
-  const handleJetFlyOn = () => {
-    if (jetstreamBusyRef.current || jetstreamCarrierRef.current >= JET_CARRIERS) {
-      return
+  // Leaving the table mid-flight still settles the bet (the outcome was fixed at takeoff).
+  useEffect(() => {
+    if (selectedGame !== 'jetstream') {
+      settleJetstreamFlight()
     }
-    attemptJetHop(jetstreamCarrierRef.current + 1)
-  }
-
-  const handleJetLand = () => {
-    const activeRound = jetstreamRoundRef.current
-    const landedCarrier = jetstreamCarrierRef.current
-    if (jetstreamBusyRef.current || landedCarrier < 1 || !activeRound || jetstreamStatus !== 'flying') {
-      return
-    }
-    const stake = jetstreamBetRef.current
-    const multiplier = activeRound.multipliers[landedCarrier - 1]
-    const payout = roundMoney(stake * multiplier)
-    const net = roundMoney(payout - stake)
-    const round: JetstreamRound = {
-      id: `jet-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      bet: stake,
-      multiplier,
-      payout,
-      net,
-      cashed: true,
-    }
-    setBankroll((currentBankroll) => currentBankroll + payout)
-    setJetstreamStatus('cashed')
-    applyPlayerDailyDelta(net)
-    applyCasinoDailyDelta(net)
-    applyCasinoGameDailyDelta('jetstream', net)
-    setJetstreamResult(round)
-    setJetstreamHistory((current) => [round, ...current].slice(0, 8))
-    setJetstreamMessage(`Landed at ${formatJetMultiplier(multiplier)} for ${formatPoints(payout)} (+$${net.toFixed(2)}).`)
-  }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedGame])
 
   const handleSelectChickenDifficulty = (difficulty: ChickenDifficulty) => {
     if (chickenStatus === 'playing') {
@@ -4614,13 +5093,11 @@ function App() {
         deck: remainingDeck,
         players: nextPlayers,
         actionId: room.game.actionId + 1,
-        lastActorId: room.game.lastActionType === 'check' ? room.game.lastActorId : null,
-        lastActionType:
-          room.game.lastActionType === 'check'
-            ? ('check' as PokerActionType)
-            : ('street' as PokerActionType),
-        lastContributions: [],
-        lastAction: `${nextStreet.charAt(0).toUpperCase()}${nextStreet.slice(1)} card(s) are out.`,
+        // keep the action that closed the round, so everyone still sees it
+        lastActorId: room.game.lastActorId,
+        lastActionType: room.game.lastActorId ? room.game.lastActionType : ('street' as PokerActionType),
+        lastContributions: room.game.lastContributions ?? [],
+        lastAction: `${room.game.lastActorId ? `${room.game.lastAction} ` : ''}${nextStreet.charAt(0).toUpperCase()}${nextStreet.slice(1)} card(s) are out.`,
         winnerMessage: null,
       },
     }
@@ -5196,13 +5673,15 @@ function App() {
     setRouletteResult(null)
     setRouletteIsSpinning(true)
     setBankroll((currentBankroll) => currentBankroll - rouletteTotalBet)
-    setRouletteBallAngle(
-      (currentRotation) => {
-        const currentNormalized = normalizeRotation(currentRotation)
-        const delta = normalizeRotation(targetRotation - currentNormalized)
-        return currentRotation + 1080 + delta
-      },
-    )
+    if (rouletteWheelRef.current && rouletteBallRef.current) {
+      rouletteSpinPoseRef.current = runRouletteSpin(
+        rouletteWheelRef.current,
+        rouletteBallRef.current,
+        rouletteSpinPoseRef.current,
+        targetRotation,
+        ROULETTE_SPIN_DURATION_MS,
+      )
+    }
     setBetInputError('')
 
     window.setTimeout(() => {
@@ -5420,7 +5899,11 @@ function App() {
 
     if (nextTile.isMine) {
       const nextBoard = minesBoard.map((tile) =>
-        tile.isMine || tile.id === tileId ? { ...tile, revealed: true } : tile,
+        tile.id === tileId
+          ? { ...tile, revealed: true, hit: true }
+          : tile.isMine
+            ? { ...tile, revealed: true }
+            : tile,
       )
       const result: RoundResult = {
         message: 'Mine hit. The whole bet is gone.',
@@ -5438,10 +5921,12 @@ function App() {
       return
     }
 
-    const nextBoard = minesBoard.map((tile) =>
-      tile.id === tileId ? { ...tile, revealed: true } : tile,
-    )
     const nextSafePicks = minesSafePicks + 1
+    const nextBoard = minesBoard.map((tile) =>
+      tile.id === tileId
+        ? { ...tile, revealed: true, multiplier: getMinesMultiplier(nextSafePicks, minesCount) }
+        : tile,
+    )
     const nextCashOutAmount = Math.round(bet * getMinesMultiplier(nextSafePicks, minesCount))
 
     setMinesBoard(nextBoard)
@@ -6395,9 +6880,11 @@ function App() {
                         setDiceResult(null)
                       }}
                       disabled={diceRolling}
-                      aria-label="Roll lower"
+                      aria-label="Roll under the target"
+                      aria-pressed={diceMode === 'lower'}
                     >
-                      ←
+                      <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 16L3 7h14z" fill="currentColor" /></svg>
+                      <span>Under</span>
                     </button>
 
                     <div className="dice-controls__target">
@@ -6431,9 +6918,11 @@ function App() {
                         setDiceResult(null)
                       }}
                       disabled={diceRolling}
-                      aria-label="Roll higher"
+                      aria-label="Roll over the target"
+                      aria-pressed={diceMode === 'higher'}
                     >
-                      →
+                      <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4l7 9H3z" fill="currentColor" /></svg>
+                      <span>Over</span>
                     </button>
                   </div>
 
@@ -6444,8 +6933,13 @@ function App() {
                   </div>
                 </div>
 
-                <div className="round-result round-result--roulette dice-result">
-                  <strong>{diceTotal !== null ? `Total ${diceTotal}` : 'Roll to reveal the total.'}</strong>
+                <div
+                  className={`round-result round-result--roulette dice-result${
+                    diceResult ? (diceResult.delta > 0 ? ' round-result--win' : ' round-result--loss') : ''
+                  }`}
+                  key={diceResult ? 'settled' : 'pending'}
+                >
+                  <strong>{diceRolling ? 'Rolling…' : diceTotal !== null ? `Total ${diceTotal}` : 'Roll to reveal the total.'}</strong>
                   <span>
                     {diceResult
                       ? `Net ${formatSignedPoints(diceResult.delta)}`
@@ -6724,6 +7218,14 @@ function App() {
                       </div>
                     ) : null}
                   </div>
+                  <button
+                    type="button"
+                    className="action-button action-button--primary slots-spin-button"
+                    onClick={handleSpinSlots}
+                    disabled={slotsSpinning || (!slotsBonusActive && (!canPlaceBets || bet > bankroll))}
+                  >
+                    {slotsSpinning ? 'Spinning…' : slotsBonusActive ? 'Respin' : 'Spin'}
+                  </button>
                 </div>
               </div>
             </div>
@@ -6733,25 +7235,21 @@ function App() {
                 <div className="jet-fs__scene">
                   <JetstreamBoard
                     status={jetstreamStatus}
-                    round={jetstreamRound}
-                    carrier={jetstreamCarrier}
-                    splashSegment={jetstreamSplashSegment}
-                    multiplierRef={jetstreamMultiplierRef}
+                    flight={jetstreamFlight}
+                    bet={jetstreamStatus === 'idle' ? bet : jetstreamBet}
+                    onFinish={handleJetstreamFinish}
                   />
 
-                  <div className="jet-fs__hud">
-                    <span className="jet-fs__eyebrow">Jetstream</span>
-                    <p className="jet-fs__status">{jetstreamMessage}</p>
-                  </div>
+                  <p className="jet-fs__status" role="status">{jetstreamMessage}</p>
 
                   {jetstreamHistory.length > 0 ? (
-                    <div className="jet-fs__recent">
+                    <div className="jet-fs__recent" aria-label="Recent flights">
                       {jetstreamHistory.map((round) => (
                         <span
                           key={round.id}
                           className={`jet-chip${round.cashed ? ' is-win' : ' is-loss'}`}
                         >
-                          {formatJetMultiplier(round.multiplier)}
+                          {round.cashed ? formatJetMultiplier(round.multiplier) : 'Splash'}
                         </span>
                       ))}
                     </div>
@@ -6764,9 +7262,10 @@ function App() {
 
                 <div className="jet-fs__bar">
                   <div className="jet-fs__field">
-                    <label>Bet</label>
+                    <label htmlFor="jet-bet">Bet</label>
                     <div className="bet-entry__form">
                       <input
+                        id="jet-bet"
                         type="number"
                         min={MIN_BET}
                         value={betInput}
@@ -6787,9 +7286,33 @@ function App() {
                     </div>
                   </div>
 
+                  <div className="jet-fs__speeds" role="radiogroup" aria-label="Flight speed">
+                    {JET_SPEED_ORDER.map((speed) => {
+                      const cfg = JET_SPEEDS[speed]
+                      return (
+                        <button
+                          key={speed}
+                          type="button"
+                          role="radio"
+                          aria-checked={jetstreamSpeed === speed}
+                          className={`jet-fs__speed${jetstreamSpeed === speed ? ' is-active' : ''}`}
+                          onClick={() => handleSelectJetSpeed(speed)}
+                          disabled={jetstreamStatus === 'flying'}
+                        >
+                          <strong>{cfg.label}</strong>
+                          <span className="jet-fs__risk" aria-label={`Risk ${cfg.risk} of 4`}>
+                            {[1, 2, 3, 4].map((n) => (
+                              <i key={n} className={n <= cfg.risk ? 'is-on' : undefined} />
+                            ))}
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
+
                   <div className="jet-fs__meta">
-                    <span>Carrier</span>
-                    <strong>{jetstreamCarrier} / {JET_CARRIERS}</strong>
+                    <span>Landing odds</span>
+                    <strong>{Math.round(JET_LAND_CHANCE[jetstreamSpeed] * 100)}%</strong>
                     {jetstreamResult ? (
                       <em className={jetstreamResult.cashed ? 'is-win' : 'is-loss'}>
                         {jetstreamResult.cashed
@@ -6802,39 +7325,14 @@ function App() {
                   {betInputError ? <p className="jet-fs__error">{betInputError}</p> : null}
 
                   <div className="jet-fs__actions">
-                    {jetstreamStatus === 'flying' ? (
-                      <>
-                        <button
-                          type="button"
-                          className="action-button jet-fs__land"
-                          onClick={handleJetLand}
-                          disabled={jetstreamBusy || jetstreamCarrier < 1}
-                        >
-                          Land ({jetstreamCarrier >= 1 && jetstreamRound
-                            ? formatJetMultiplier(jetstreamRound.multipliers[jetstreamCarrier - 1])
-                            : '—'})
-                        </button>
-                        <button
-                          type="button"
-                          className="action-button action-button--primary jet-fs__go"
-                          onClick={handleJetFlyOn}
-                          disabled={jetstreamBusy || jetstreamCarrier >= JET_CARRIERS}
-                        >
-                          {jetstreamCarrier >= JET_CARRIERS
-                            ? 'Max reached'
-                            : `Fly On → ${jetstreamRound ? formatJetMultiplier(jetstreamRound.multipliers[jetstreamCarrier]) : ''}`}
-                        </button>
-                      </>
-                    ) : (
-                      <button
-                        type="button"
-                        className="action-button action-button--primary jet-fs__go"
-                        onClick={handleLaunchJetstream}
-                        disabled={!canPlaceBets || bet > bankroll}
-                      >
-                        {jetstreamStatus === 'idle' ? 'Launch' : 'Launch Again'}
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      className="action-button action-button--primary jet-fs__go"
+                      onClick={handleLaunchJetstream}
+                      disabled={jetstreamStatus === 'flying' || !canPlaceBets || bet > bankroll}
+                    >
+                      {jetstreamStatus === 'flying' ? 'In flight…' : jetstreamStatus === 'idle' ? 'Play' : 'Play again'}
+                    </button>
                   </div>
                 </div>
               </div>,
@@ -6844,11 +7342,12 @@ function App() {
             createPortal(
               <div className="chicken-fs" style={{ top: `${fullscreenTopOffset}px` }}>
                 <div className="chicken-fs__scene">
-                  <ChickenScene
+                  <ChickenRoad
                     multipliers={getChickenConfig(chickenDifficulty).multipliers}
                     currentLane={chickenLane}
                     status={chickenStatus}
                     deathLane={chickenDeathLane}
+                    difficulty={chickenDifficulty}
                   />
 
                   <div className="chicken-fs__hud">
@@ -7069,7 +7568,14 @@ function App() {
                   <span className="blackjack-deck__card" />
                 </div>
                 <div className="table-spot table-spot--dealer">
-                  <span className="table-spot__label">Dealer</span>
+                  <span className="table-spot__label">
+                    Dealer
+                    {dealerHand.length > 0 ? (
+                      <b className="table-spot__total" key={dealerRevealed ? 'full' : 'up'}>
+                        {getHandValue(dealerRevealed || devMode ? dealerHand : dealerHand.slice(0, 1))}
+                      </b>
+                    ) : null}
+                  </span>
                   <div className="card-row">
                     {dealerHand.length === 0 ? (
                       <div className="empty-seat">Waiting to start</div>
@@ -7085,16 +7591,14 @@ function App() {
                           >
                             <div className="blackjack-hole__inner">
                               <div className="blackjack-hole__face blackjack-hole__front">
-                                <span>{card.rank}</span>
-                                <small className={getSuitColorClass(card.suit)}>{card.suit}</small>
+                                <CardFace rank={card.rank} suit={card.suit} />
                               </div>
                               <span className="blackjack-hole__face blackjack-hole__back" />
                             </div>
                           </div>
                         ) : (
                           <div className="playing-card" key={`${card.rank}-${card.suit}-${index}`} ref={aimCardFromDeck}>
-                            <span>{card.rank}</span>
-                            <small className={getSuitColorClass(card.suit)}>{card.suit}</small>
+                            <CardFace rank={card.rank} suit={card.suit} />
                           </div>
                         ),
                       )
@@ -7103,15 +7607,23 @@ function App() {
                 </div>
 
                 <div className="table-center">
-                  <p className="table-center__title">UES Underground Casino Blackjack</p>
-                  <p className="table-center__rules">Reach 21 without going over</p>
-                  <p className="table-center__rules">Face cards count as 10</p>
                   {roundResult ? (
-                    <div className="round-result">
+                    <div
+                      className={`round-result round-result--${
+                        roundResult.delta > 0 ? 'win' : roundResult.delta < 0 ? 'loss' : 'push'
+                      }`}
+                      key={roundResult.message}
+                      role="status"
+                    >
                       <strong>{roundResult.message}</strong>
                       <span>{getScoreChangeLabel(roundResult.delta)}</span>
                     </div>
-                  ) : null}
+                  ) : (
+                    <>
+                      <p className="table-center__title">UES Underground Casino Blackjack</p>
+                      <p className="table-center__rules">Reach 21 without going over · Face cards count as 10</p>
+                    </>
+                  )}
                 </div>
 
                 <div className="table-spot table-spot--player">
@@ -7134,8 +7646,7 @@ function App() {
                                 key={`${card.rank}-${card.suit}-${index}-${cardIndex}`}
                                 ref={aimCardFromDeck}
                               >
-                                <span>{card.rank}</span>
-                                <small className={getSuitColorClass(card.suit)}>{card.suit}</small>
+                                <CardFace rank={card.rank} suit={card.suit} />
                               </div>
                             ))}
                           </div>
@@ -7249,58 +7760,16 @@ function App() {
                   </button>
                 </div>
 
-                <div className="roulette-wheel">
-                  <div
-                    className="roulette-wheel__outer"
-                    style={{
-                      backgroundImage: ROULETTE_WHEEL_GRADIENT,
-                    }}
-                  >
-                    {ROULETTE_WHEEL_ORDER.map((value: RoulettePocket, index) => {
-                      const sliceSize = 360 / ROULETTE_WHEEL_ORDER.length
-                      const angle = sliceSize * index + sliceSize / 2
-                      return (
-                        <button
-                          type="button"
-                          className={`roulette-wheel__number ${
-                            value === 0 || value === '00'
-                              ? 'roulette-wheel__number--green'
-                              : ROULETTE_RED_NUMBERS.has(String(value))
-                                ? 'roulette-wheel__number--red'
-                                : 'roulette-wheel__number--black'
-                          } ${
-                            rouletteBets.some(
-                              (entry) => entry.bet.kind === 'number' && entry.bet.value === value,
-                            )
-                              ? 'roulette-wheel__number--selected'
-                              : ''
-                          } ${
-                            rouletteWinningNumber === value
-                              ? 'roulette-wheel__number--winning'
-                              : ''
-                          }`}
-                          key={value}
-                          onClick={() => {
-                            handleSelectRouletteBet({ kind: 'number', value })
-                          }}
-                          disabled={rouletteIsSpinning}
-                          style={{
-                            transform: `translate(-50%, -50%) rotate(${angle}deg) translateY(-138px) rotate(0deg)`,
-                          }}
-                        >
-                          {value}
-                        </button>
-                      )
-                    })}
-                    <div className="roulette-wheel__center" />
-                  </div>
-                  <div
-                    className="roulette-wheel__ball"
-                    style={{
-                      transform: `translate(-50%, -50%) rotate(${rouletteBallAngle}deg) translateY(-150px)`,
-                    }}
-                  />
-                </div>
+                <RouletteWheel
+                  order={ROULETTE_WHEEL_ORDER}
+                  redNumbers={ROULETTE_RED_NUMBERS}
+                  winning={rouletteWinningNumber}
+                  spinning={rouletteIsSpinning}
+                  rotorRef={rouletteWheelRef}
+                  ballRef={rouletteBallRef}
+                  rotorTransform={rouletteSpinTransforms(rouletteSpinPoseRef.current).wheel}
+                  ballTransform={rouletteSpinTransforms(rouletteSpinPoseRef.current).ball}
+                />
 
                 <div className="roulette-table">
                   <div className="roulette-table__greens">
@@ -7511,7 +7980,7 @@ function App() {
 
                 <div className="roulette-payouts">
                   <div className="roulette-payouts__item">
-                    <span>Straight Up / 0 / 00</span>
+                    <span>Straight up</span>
                     <strong>35:1</strong>
                   </div>
                   <div className="roulette-payouts__item">
@@ -7519,7 +7988,7 @@ function App() {
                     <strong>2:1</strong>
                   </div>
                   <div className="roulette-payouts__item">
-                    <span>1st 3rd / 2nd 3rd / 3rd 3rd</span>
+                    <span>Dozens</span>
                     <strong>2:1</strong>
                   </div>
                   <div className="roulette-payouts__item">
@@ -7531,7 +8000,7 @@ function App() {
                     <strong>1:1</strong>
                   </div>
                   <div className="roulette-payouts__item">
-                    <span>1st Half / 2nd Half</span>
+                    <span>1–18 / 19–36</span>
                     <strong>1:1</strong>
                   </div>
                 </div>
@@ -7563,7 +8032,9 @@ function App() {
                               disabled={rouletteIsSpinning}
                               aria-label={`Delete ${getRouletteBetDisplayLabel(entry.bet)} bet`}
                             >
-                              🗑
+                              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                                <path d="M4 7h16M9.5 7V4.8c0-.44.36-.8.8-.8h3.4c.44 0 .8.36.8.8V7M6.5 7l.85 11.6c.06.8.73 1.4 1.53 1.4h6.24c.8 0 1.47-.6 1.53-1.4L17.5 7M10 11v5M14 11v5" />
+                              </svg>
                             </button>
                             <p className="bet-panel__label">Bet</p>
                             <h3>{getRouletteBetDisplayLabel(entry.bet)}</h3>
@@ -7680,16 +8151,19 @@ function App() {
                   </div>
                 </div>
 
-                <div className="mines-board">
+                <div className={`mines-board${minesBoard.length > 0 ? '' : ' mines-board--idle'}`}>
                   {minesBoard.length > 0 ? (
-                    minesBoard.map((tile) => (
+                    minesBoard.map((tile, index) => (
                       <button
                         type="button"
                         key={tile.id}
+                        style={{ '--i': index } as CSSProperties}
                         className={`mines-cell ${
                           tile.revealed
                             ? tile.isMine
-                              ? 'mines-cell--mine'
+                              ? tile.hit
+                                ? 'mines-cell--mine mines-cell--hit'
+                                : 'mines-cell--mine mines-cell--exposed'
                               : 'mines-cell--safe'
                             : ''
                         }`}
@@ -7700,7 +8174,16 @@ function App() {
                       >
                         {tile.revealed ? (
                           <span className="mines-cell__content">
-                            {tile.isMine ? 'MINE' : `x${minesMultiplier.toFixed(2)}`}
+                            {tile.isMine ? (
+                              <MineIcon className="mines-cell__art" />
+                            ) : (
+                              <>
+                                <GemIcon className="mines-cell__art" />
+                                <small className="mines-cell__mult">
+                                  x{(tile.multiplier ?? minesMultiplier).toFixed(2)}
+                                </small>
+                              </>
+                            )}
                           </span>
                         ) : devMode && tile.isMine ? (
                           <span className="mines-cell__content mines-cell__content--dev-mine">
@@ -7712,14 +8195,25 @@ function App() {
                       </button>
                     ))
                   ) : (
-                    <div className="mines-board__empty">
-                      Start a round to load the 5x5 field.
-                    </div>
+                    <>
+                      {Array.from({ length: 25 }, (_, index) => (
+                        <span key={index} className="mines-cell mines-cell--idle" aria-hidden="true">
+                          <span className="mines-cell__cover" />
+                        </span>
+                      ))}
+                      <p className="mines-board__empty">Press Start Round</p>
+                    </>
                   )}
                 </div>
 
                 {minesResult ? (
-                  <div className="round-result round-result--roulette">
+                  <div
+                    className={`round-result round-result--roulette round-result--${
+                      minesResult.delta > 0 ? 'win' : minesResult.delta < 0 ? 'loss' : 'push'
+                    }`}
+                    key={minesResult.message}
+                    role="status"
+                  >
                     <strong>{minesResult.message}</strong>
                     <span>
                       {getScoreChangeLabel(minesResult.delta)}
@@ -7863,14 +8357,13 @@ function App() {
                         </>
                       ) : null}
 
-                      <div className="poker-felt">
+                      <div
+                        className={`poker-felt${pokerGame ? ' poker-felt--live' : ''}${
+                          pokerGame?.street === 'showdown' ? ' poker-felt--showdown' : ''
+                        }`}
+                      >
                         {pokerPotAnimations.map((animation) => (
-                          <div
-                            className={`poker-pot-animation poker-pot-animation--seat-${animation.seatIndex + 1}${
-                              pokerGame?.communityCards.length ? ' poker-pot-animation--board' : ' poker-pot-animation--preboard'
-                            }`}
-                            key={animation.id}
-                          >
+                          <div className="poker-pot-animation" data-seat={animation.seatIndex} key={animation.id}>
                             <div className="poker-chip-trail">
                               {animation.chips.map((chip, index) => (
                                 <div
@@ -7928,6 +8421,15 @@ function App() {
                                     <span className="poker-seat__check-ring poker-seat__check-ring--two" />
                                   </div>
                                 ) : null}
+                                {seat && pokerActionPops[seat.id] ? (
+                                  <span
+                                    className={`poker-seat__action-pop poker-seat__action-pop--${pokerActionPops[seat.id].kind}`}
+                                    key={pokerActionPops[seat.id].id}
+                                    aria-hidden="true"
+                                  >
+                                    {pokerActionPops[seat.id].tag}
+                                  </span>
+                                ) : null}
                                 <span>{seat ? seat.name : 'Open Seat'}</span>
                                 <strong>
                                   {seat
@@ -7960,8 +8462,7 @@ function App() {
                                               key={`${seat.id}-${card.rank}-${card.suit}`}
                                               style={{ animationDelay: `${index * 90}ms` }}
                                             >
-                                              <span>{card.rank}</span>
-                                              <small className={getSuitColorClass(card.suit)}>{card.suit}</small>
+                                              <CardFace rank={card.rank} suit={card.suit} />
                                             </div>
                                           ))
                                         : [0, 1].map((index) => (
@@ -8009,8 +8510,7 @@ function App() {
                                     key={`community-${index}`}
                                     style={{ animationDelay }}
                                   >
-                                    <span>{card.rank}</span>
-                                    <small className={getSuitColorClass(card.suit)}>{card.suit}</small>
+                                    <CardFace rank={card.rank} suit={card.suit} />
                                   </div>
                                 )
                               })}
@@ -8061,8 +8561,7 @@ function App() {
                                 key={`you-${card.rank}-${card.suit}`}
                                 style={{ animationDelay: `${index * 110}ms` }}
                               >
-                                <span>{card.rank}</span>
-                                <small className={getSuitColorClass(card.suit)}>{card.suit}</small>
+                                <CardFace rank={card.rank} suit={card.suit} />
                               </div>
                             ))}
                           </div>
@@ -8167,6 +8666,18 @@ function App() {
                       ) : null}
                       {(betInputError || pokerActionError) ? (
                         <p className="bet-panel__error">{betInputError || pokerActionError}</p>
+                      ) : null}
+                      {pokerGame && pokerHandLog.length > 0 ? (
+                        <div className="poker-log">
+                          <p className="bet-panel__label">This hand</p>
+                          <ol className="poker-log__list">
+                            {pokerHandLog.map((entry) => (
+                              <li className={`poker-log__item poker-log__item--${entry.kind}`} key={entry.id}>
+                                {entry.text}
+                              </li>
+                            ))}
+                          </ol>
+                        </div>
                       ) : null}
                       {pokerGame ? (
                         <div className="poker-controls">
@@ -8417,8 +8928,7 @@ function App() {
                     <span className="table-spot__label">Current Card</span>
                     {hiLoCurrentCard ? (
                       <div className="playing-card hilo-card">
-                        <span>{hiLoCurrentCard.rank}</span>
-                        <small className={getSuitColorClass(hiLoCurrentCard.suit)}>{hiLoCurrentCard.suit}</small>
+                        <CardFace rank={hiLoCurrentCard.rank} suit={hiLoCurrentCard.suit} />
                       </div>
                     ) : (
                       <div className="empty-seat">Start to begin</div>
@@ -8430,18 +8940,14 @@ function App() {
                       <div className="hilo-card-stack">
                         {devMode && hiLoUpcomingCard ? (
                           <div className="playing-card hilo-card hilo-card--base">
-                            <span>{hiLoUpcomingCard.rank}</span>
-                            <small className={getSuitColorClass(hiLoUpcomingCard.suit)}>
-                              {hiLoUpcomingCard.suit}
-                            </small>
+                            <CardFace rank={hiLoUpcomingCard.rank} suit={hiLoUpcomingCard.suit} />
                           </div>
                         ) : (
                           <div className="playing-card playing-card--back hilo-card hilo-card--base" />
                         )}
                         {hiLoNextCard ? (
                           <div className={`playing-card hilo-card hilo-card--overlay${hiLoSliding ? ' hilo-card--slide' : ''}`}>
-                            <span>{hiLoNextCard.rank}</span>
-                            <small className={getSuitColorClass(hiLoNextCard.suit)}>{hiLoNextCard.suit}</small>
+                            <CardFace rank={hiLoNextCard.rank} suit={hiLoNextCard.suit} />
                           </div>
                         ) : null}
                       </div>
@@ -8452,7 +8958,13 @@ function App() {
                 </div>
 
                 {hiLoResult ? (
-                  <div className="round-result round-result--roulette">
+                  <div
+                    className={`round-result round-result--roulette round-result--${
+                      hiLoResult.delta > 0 ? 'win' : hiLoResult.delta < 0 ? 'loss' : 'push'
+                    }`}
+                    key={hiLoResult.message}
+                    role="status"
+                  >
                     <strong>{hiLoResult.message}</strong>
                     <span>
                       {getScoreChangeLabel(hiLoResult.delta)}
@@ -8522,7 +9034,7 @@ function App() {
                       {hiLoResult ? 'Start Next Round' : 'Reveal First Card'}
                     </button>
                   ) : (
-                    <div className="action-row action-row--trio">
+                    <div className="action-row action-row--trio hilo-guess">
                       <button
                         type="button"
                         className="action-button action-button--primary"
@@ -8531,10 +9043,13 @@ function App() {
                         }}
                         disabled={hiLoOdds.higherStepMultiplier <= 0 || hiLoResolving}
                       >
-                        <span>Higher</span>
+                        <span className="hilo-guess__label">
+                          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4l7 9H3z" fill="currentColor" /></svg>
+                          Higher
+                        </span>
                         <small>
                           {hiLoOdds.higherStepMultiplier > 0
-                            ? `x${(hiLoMultiplier * hiLoOdds.higherStepMultiplier).toFixed(2)}`
+                            ? `${Math.round(hiLoOdds.higherProbability * 100)}% · x${(hiLoMultiplier * hiLoOdds.higherStepMultiplier).toFixed(2)}`
                             : 'No outs'}
                         </small>
                       </button>
@@ -8546,10 +9061,13 @@ function App() {
                         }}
                         disabled={hiLoOdds.lowerStepMultiplier <= 0 || hiLoResolving}
                       >
-                        <span>Lower</span>
+                        <span className="hilo-guess__label">
+                          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 16L3 7h14z" fill="currentColor" /></svg>
+                          Lower
+                        </span>
                         <small>
                           {hiLoOdds.lowerStepMultiplier > 0
-                            ? `x${(hiLoMultiplier * hiLoOdds.lowerStepMultiplier).toFixed(2)}`
+                            ? `${Math.round(hiLoOdds.lowerProbability * 100)}% · x${(hiLoMultiplier * hiLoOdds.lowerStepMultiplier).toFixed(2)}`
                             : 'No outs'}
                         </small>
                       </button>
@@ -8576,53 +9094,30 @@ function App() {
         <div className="poker-modal">
           <div className="poker-modal__card poker-modal__card--dev">
             <p className="bet-panel__label">Developer Access</p>
-            <h3>Enter access code</h3>
-            <div className="bet-entry poker-modal__entry">
-              <div className="bet-entry__form">
-                <input
-                  type="password"
-                  value={devModeInput}
-                  onChange={(event) => {
-                    setDevModeInput(event.target.value)
-                    setDevModeError('')
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                      handleSubmitDevModeCode()
-                    }
-
-                    if (event.key === 'Escape') {
-                      setDevModePromptOpen(false)
-                      setDevModeInput('')
-                      setDevModeError('')
-                      setDevModeVerifying(false)
-                    }
-                  }}
-                  placeholder="Enter code"
-                  autoFocus
-                />
-              </div>
-            </div>
+            <h3>Sign in with Google</h3>
+            <p className="roulette-stage__status dev-auth__note">
+              Developer mode is only for {DEVELOPER_EMAIL}.
+            </p>
             {devModeError ? <p className="bet-panel__error">{devModeError}</p> : null}
             <div className="poker-modal__actions">
               <button
                 type="button"
-                className="action-button action-button--primary"
-                onClick={handleSubmitDevModeCode}
+                className="action-button action-button--primary dev-auth__google"
+                onClick={handleDeveloperSignIn}
                 disabled={devModeVerifying}
+                autoFocus
               >
-                {devModeVerifying ? 'Checking...' : 'Confirm'}
+                <GoogleMark />
+                {devModeVerifying ? 'Waiting for Google…' : 'Continue with Google'}
               </button>
               <button
                 type="button"
                 className="action-button"
                 onClick={() => {
                   setDevModePromptOpen(false)
-                  setDevModeInput('')
                   setDevModeError('')
                   setDevModeVerifying(false)
                 }}
-                disabled={devModeVerifying}
               >
                 Cancel
               </button>
@@ -8634,39 +9129,21 @@ function App() {
         <div className="poker-modal">
           <div className="poker-modal__card poker-modal__card--dev">
             <p className="bet-panel__label">Reset Statistics</p>
-            <h3>Enter dev password for {casinoStatsResetScopeLabel}</h3>
-            <div className="bet-entry poker-modal__entry">
-              <div className="bet-entry__form">
-                <input
-                  type="password"
-                  value={casinoStatsResetInput}
-                  onChange={(event) => {
-                    setCasinoStatsResetInput(event.target.value)
-                    setCasinoStatsResetError('')
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                      handleVerifyCasinoStatsReset()
-                    }
-
-                    if (event.key === 'Escape') {
-                      handleCancelCasinoStatsReset()
-                    }
-                  }}
-                  placeholder="Enter code"
-                  autoFocus
-                />
-              </div>
-            </div>
+            <h3>Sign in to reset {casinoStatsResetScopeLabel}</h3>
+            <p className="roulette-stage__status dev-auth__note">
+              Only {DEVELOPER_EMAIL} can reset statistics.
+            </p>
             {casinoStatsResetError ? <p className="bet-panel__error">{casinoStatsResetError}</p> : null}
             <div className="poker-modal__actions">
               <button
                 type="button"
-                className="action-button action-button--primary"
+                className="action-button action-button--primary dev-auth__google"
                 onClick={handleVerifyCasinoStatsReset}
                 disabled={casinoStatsResetVerifying}
+                autoFocus
               >
-                {casinoStatsResetVerifying ? 'Checking...' : 'Continue'}
+                <GoogleMark />
+                {casinoStatsResetVerifying ? 'Waiting for Google…' : 'Continue with Google'}
               </button>
               <button
                 type="button"

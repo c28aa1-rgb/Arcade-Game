@@ -1,0 +1,15 @@
+rules_version = '2';
+
+// The casino has no sign-in, so these stay open, but only for the two
+// collections the app actually uses. Everything else is denied.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /players/{playerId} {
+      allow read, write: if true;
+    }
+
+    match /pokerRooms/{roomCode} {
+      allow read, write: if true;
+    }
+  }
+}
