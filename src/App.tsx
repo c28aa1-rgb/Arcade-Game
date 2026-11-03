@@ -867,13 +867,39 @@ const getOrCreateLocalPlayerProfile = (): LocalPlayerProfile => {
   return nextProfile
 }
 
-const formatPoints = (value: number) => `$${Math.round(value).toLocaleString()}`
+// Money as shown on screen. Under a million it's the full number (12,450);
+// from a million up it shortens so it always fits: 1.25M, 999M, 3.4B, 2T.
+// It cuts off rather than rounds up, so $999,999,999 reads 999M, never 1B.
+const MONEY_UNITS = [
+  { size: 1e12, suffix: 'T' },
+  { size: 1e9, suffix: 'B' },
+  { size: 1e6, suffix: 'M' },
+]
+
+const formatAmount = (value: number) => {
+  const amount = Math.abs(value)
+  const unit = MONEY_UNITS.find((entry) => amount >= entry.size)
+  if (!unit) {
+    return Math.round(amount).toLocaleString('en-US')
+  }
+  const scaled = amount / unit.size
+  const decimals = scaled < 10 ? 2 : scaled < 100 ? 1 : 0
+  const factor = 10 ** decimals
+  const shown = Math.floor(scaled * factor) / factor
+  return `${Number(shown.toFixed(decimals)).toLocaleString('en-US')}${unit.suffix}`
+}
+
+// The same, but small amounts keep their cents ($12.40) for exact payouts.
+const formatCents = (value: number) =>
+  Math.abs(value) >= 1e6 ? formatAmount(value) : Math.abs(value).toFixed(2)
+
+const formatPoints = (value: number) => `${value < 0 ? '-' : ''}$${formatAmount(value)}`
 const formatSignedPoints = (value: number) => {
   if (value === 0) {
     return '$0'
   }
 
-  return `${value > 0 ? '+' : '-'}$${Math.abs(Math.round(value)).toLocaleString()}`
+  return `${value > 0 ? '+' : '-'}$${formatAmount(value)}`
 }
 
 const getScoreChangeLabel = (value: number) =>
@@ -1042,9 +1068,9 @@ const CasinoStatisticsChart = ({ stats }: { stats: CasinoDailyStat[] }) => {
             <strong>{hoveredPoint.date}</strong>
             <span>
               {hoveredPoint.amount > 0
-                ? `House +$${Math.abs(hoveredPoint.amount).toLocaleString()}`
+                ? `House +$${formatAmount(hoveredPoint.amount)}`
                 : hoveredPoint.amount < 0
-                  ? `House -$${Math.abs(hoveredPoint.amount).toLocaleString()}`
+                  ? `House -$${formatAmount(hoveredPoint.amount)}`
                   : 'House $0'}
             </span>
           </div>
@@ -1754,7 +1780,7 @@ function App() {
           </span>
           <strong className="slots-machine__orb-value">
             {displayCell.jackpot
-              ? `$${slotsJackpots[displayCell.jackpot].toLocaleString()}`
+              ? `$${formatAmount(slotsJackpots[displayCell.jackpot])}`
               : `$${displayCell.value}`}
           </strong>
         </>
@@ -3583,7 +3609,7 @@ function App() {
     setPlinkoWinStreak((currentStreak) => (payout > settledDrop.bet ? currentStreak + 1 : 0))
     setPlinkoMessage(
       `Ball lands in ${multiplier}x. ${
-        net >= 0 ? `You win $${net.toFixed(2)}.` : `You lose $${Math.abs(net).toFixed(2)}.`
+        net >= 0 ? `You win $${formatCents(net)}.` : `You lose $${formatCents(net)}.`
       }`,
     )
     setPendingPlinkoDrops((currentDrops) => currentDrops.filter((drop) => drop.id !== dropId))
@@ -3656,8 +3682,8 @@ function App() {
     setJetstreamStatus(flight.landed ? 'landed' : 'splashed')
     setJetstreamMessage(
       flight.landed
-        ? `Landed at ${formatJetMultiplier(flight.payoutMultiplier)} — ${formatPoints(payout)} (+$${net.toFixed(2)}).`
-        : `Splash! The plane went into the sea. You lose $${stake.toFixed(2)}.`,
+        ? `Landed at ${formatJetMultiplier(flight.payoutMultiplier)} — ${formatPoints(payout)} (+$${formatCents(net)}).`
+        : `Splash! The plane went into the sea. You lose $${formatCents(stake)}.`,
     )
   }
 
@@ -3794,7 +3820,7 @@ function App() {
           net: roundMoney(-chickenBet),
           cashed: false,
         })
-        setChickenMessage(`Splat! A car got you on lane ${hop.lane}. You lose $${chickenBet.toFixed(2)}.`)
+        setChickenMessage(`Splat! A car got you on lane ${hop.lane}. You lose $${formatCents(chickenBet)}.`)
       })
       .catch((error) => {
         chickenHopLockRef.current = false
@@ -3823,7 +3849,7 @@ function App() {
           cashed: true,
         })
         setChickenMessage(
-          `Cashed out at ${formatChickenMultiplier(cashout.multiplier)} for ${formatPoints(cashout.payout)} (+$${cashout.net.toFixed(2)}).`,
+          `Cashed out at ${formatChickenMultiplier(cashout.multiplier)} for ${formatPoints(cashout.payout)} (+$${formatCents(cashout.net)}).`,
         )
       })
       .catch(reportCasinoError)
@@ -5223,9 +5249,9 @@ function App() {
                         }
                       >
                         {lifetimeCasinoProfit > 0
-                          ? `+$${Math.abs(lifetimeCasinoProfit).toLocaleString()}`
+                          ? `+$${formatAmount(lifetimeCasinoProfit)}`
                           : lifetimeCasinoProfit < 0
-                            ? `-$${Math.abs(lifetimeCasinoProfit).toLocaleString()}`
+                            ? `-$${formatAmount(lifetimeCasinoProfit)}`
                             : '$0'}
                       </strong>
                     </div>
@@ -5305,9 +5331,9 @@ function App() {
                         }
                       >
                         {lifetimeSelectedCasinoGameProfit > 0
-                          ? `+$${Math.abs(lifetimeSelectedCasinoGameProfit).toLocaleString()}`
+                          ? `+$${formatAmount(lifetimeSelectedCasinoGameProfit)}`
                           : lifetimeSelectedCasinoGameProfit < 0
-                            ? `-$${Math.abs(lifetimeSelectedCasinoGameProfit).toLocaleString()}`
+                            ? `-$${formatAmount(lifetimeSelectedCasinoGameProfit)}`
                             : '$0'}
                       </strong>
                     </div>
@@ -5537,19 +5563,19 @@ function App() {
                 <div className="slots-jackpots">
                   <article className="slots-jackpot slots-jackpot--mini">
                     <span>Mini</span>
-                    <strong>${slotsJackpots.mini.toLocaleString()}</strong>
+                    <strong>${formatAmount(slotsJackpots.mini)}</strong>
                   </article>
                   <article className="slots-jackpot slots-jackpot--minor">
                     <span>Minor</span>
-                    <strong>${slotsJackpots.minor.toLocaleString()}</strong>
+                    <strong>${formatAmount(slotsJackpots.minor)}</strong>
                   </article>
                   <article className="slots-jackpot slots-jackpot--major">
                     <span>Major</span>
-                    <strong>${slotsJackpots.major.toLocaleString()}</strong>
+                    <strong>${formatAmount(slotsJackpots.major)}</strong>
                   </article>
                   <article className="slots-jackpot slots-jackpot--grand">
                     <span>Grand</span>
-                    <strong>${slotsJackpots.grand.toLocaleString()}</strong>
+                    <strong>${formatAmount(slotsJackpots.grand)}</strong>
                   </article>
                 </div>
 

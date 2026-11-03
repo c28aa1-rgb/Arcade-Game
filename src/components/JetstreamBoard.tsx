@@ -588,6 +588,19 @@ type Scene = {
   status: JetstreamStatus
 }
 
+// big wins shorten so they fit the counter: 1.25M, 999M, 3.4B
+function formatBoardMoney(value: number) {
+  const units: [number, string][] = [[1e12, 'T'], [1e9, 'B'], [1e6, 'M']]
+  const unit = units.find(([size]) => value >= size)
+  if (!unit) {
+    return value.toFixed(2)
+  }
+  const scaled = value / unit[0]
+  const decimals = scaled < 10 ? 2 : scaled < 100 ? 1 : 0
+  const factor = 10 ** decimals
+  return `${Number((Math.floor(scaled * factor) / factor).toFixed(decimals))}${unit[1]}`
+}
+
 export default function JetstreamBoard({ status, flight, bet, onFinish }: JetstreamBoardProps) {
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -1073,7 +1086,7 @@ export default function JetstreamBoard({ status, flight, bet, onFinish }: Jetstr
       ctx.font = '400 64px "Titan One", "Archivo", sans-serif'
       ctx.lineWidth = 12
       ctx.strokeStyle = C.navy
-      const text = splashed ? '$0.00' : `$${money.toFixed(2)}`
+      const text = splashed ? '$0.00' : `$${formatBoardMoney(money)}`
       ctx.strokeText(text, 0, 0)
       ctx.fillStyle = splashed
         ? '#ff6a6a'
