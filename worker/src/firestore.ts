@@ -12,6 +12,12 @@ export type Env = {
   FIREBASE_SERVICE_ACCOUNT?: string
   // how long a poker table may sit without any action before it closes
   POKER_IDLE_MINUTES?: string
+  // usage alerts (see usage.ts): the Cloudflare account, a read-only
+  // analytics token, and the ntfy.sh topic the alerts are pushed to
+  CF_ACCOUNT_ID: string
+  CF_ANALYTICS_TOKEN?: string
+  ALERT_NTFY_TOPIC?: string
+  MONITOR: DurableObjectNamespace<import('./usage').UsageMonitor>
 }
 
 type FirestoreValue =
@@ -65,12 +71,14 @@ export const fromFirestoreFields = (fields: Record<string, FirestoreValue>) =>
 
 type ServiceAccount = { client_email: string; private_key: string }
 
-let cachedToken: { value: string; expiresAt: number } | null = null
+const DATASTORE_SCOPE = 'https://www.googleapis.com/auth/datastore'
+const cachedTokens = new Map<string, { value: string; expiresAt: number }>()
 
-const getAccessToken = async (env: Env) => {
+export const getAccessToken = async (env: Env, scope = DATASTORE_SCOPE) => {
   if (!env.FIREBASE_SERVICE_ACCOUNT) {
     return null
   }
+  const cachedToken = cachedTokens.get(scope)
   if (cachedToken && cachedToken.expiresAt > Date.now() + 60_000) {
     return cachedToken.value
   }
@@ -78,7 +86,7 @@ const getAccessToken = async (env: Env) => {
   const account = JSON.parse(env.FIREBASE_SERVICE_ACCOUNT) as ServiceAccount
   const key = await importPKCS8(account.private_key, 'RS256')
   const now = Math.floor(Date.now() / 1000)
-  const assertion = await new SignJWT({ scope: 'https://www.googleapis.com/auth/datastore' })
+  const assertion = await new SignJWT({ scope })
     .setProtectedHeader({ alg: 'RS256', typ: 'JWT' })
     .setIssuer(account.client_email)
     .setAudience('https://oauth2.googleapis.com/token')
@@ -96,8 +104,8 @@ const getAccessToken = async (env: Env) => {
     throw new Error(`Service account sign-in failed (${response.status})`)
   }
 
-  cachedToken = { value: payload.access_token, expiresAt: Date.now() + (payload.expires_in ?? 3600) * 1000 }
-  return cachedToken.value
+  cachedTokens.set(scope, { value: payload.access_token, expiresAt: Date.now() + (payload.expires_in ?? 3600) * 1000 })
+  return payload.access_token
 }
 
 const documentsRoot = (env: Env) =>

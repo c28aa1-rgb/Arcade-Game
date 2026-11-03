@@ -37,7 +37,11 @@ export const casinoCall = async <T = Record<string, unknown>>(
       body: JSON.stringify(body),
     })
   } catch {
-    throw new CasinoError('Could not reach the casino. Check your connection and try again.')
+    // Cloudflare's "free daily limit reached" page also lands here, since it
+    // can't be read cross-origin
+    throw new CasinoError(
+      'Could not reach the casino. Check your connection — if it is fine, the casino may have hit its free daily limit, which resets at midnight UTC.',
+    )
   }
 
   const payload = (await response.json().catch(() => null)) as

@@ -9,15 +9,24 @@
   "durable_objects": {
     "bindings": [
       { "name": "PLAYERS", "class_name": "PlayerVault" },
-      { "name": "TABLES", "class_name": "PokerTable" }
+      { "name": "TABLES", "class_name": "PokerTable" },
+      { "name": "MONITOR", "class_name": "UsageMonitor" }
     ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["PlayerVault", "PokerTable"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["PlayerVault", "PokerTable"] },
+    { "tag": "v2", "new_sqlite_classes": ["UsageMonitor"] }
+  ],
+  // free-plan usage check (see src/usage.ts)
+  "triggers": { "crons": ["*/15 * * * *"] },
   "vars": {
     "FIREBASE_PROJECT_ID": "lumex-arcade",
+    "CF_ACCOUNT_ID": "344d1ddceb093ee4dd447ab6aec7d5dc",
     "DEVELOPER_EMAIL": "c28aa1@dalton.org",
     "ALLOWED_ORIGINS": "https://c28aa1-rgb.github.io,http://localhost:5180,http://localhost:5173,http://p2.localhost:5180,http://p3.localhost:5180,http://p4.localhost:5180"
   }
   // secret: FIREBASE_SERVICE_ACCOUNT (the Firebase service-account key JSON),
   // set with `npx wrangler secret put FIREBASE_SERVICE_ACCOUNT`
+  // secret: CF_ANALYTICS_TOKEN (a Cloudflare API token with Account Analytics: Read)
+  // secret: ALERT_NTFY_TOPIC (the ntfy.sh topic usage alerts are pushed to)
 }

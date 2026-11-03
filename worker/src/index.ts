@@ -11,6 +11,9 @@ import type { Caller, PlayerVault } from './vault'
 
 export { PlayerVault } from './vault'
 export { PokerTable } from './table'
+export { UsageMonitor } from './usage'
+
+const usageMonitor = (env: Env) => env.MONITOR.get(env.MONITOR.idFromName('global'))
 
 const PLAYER_ID_PATTERN = /^player-[a-z0-9]{6,24}$/
 const ROOM_CODE_PATTERN = /^[A-Z0-9]{4}$/
@@ -163,6 +166,12 @@ export default {
       if (!isDeveloper) {
         return json(request, env, { ok: false, error: 'Developer only.' }, 403)
       }
+      if (route === 'admin/usage') {
+        return json(request, env, { ok: true, usage: await usageMonitor(env).latest() })
+      }
+      if (route === 'admin/usage-test') {
+        return json(request, env, await usageMonitor(env).sendTest())
+      }
       const targetId = String(body.targetPlayerId ?? '')
       if (!PLAYER_ID_PATTERN.test(targetId)) {
         return json(request, env, { ok: false, error: 'Unknown player.' }, 400)
@@ -181,5 +190,10 @@ export default {
     }
 
     return json(request, env, { ok: false, error: 'Not found.' }, 404)
+  },
+
+  // every 15 minutes: check the free-plan limits and alert if one is close
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil(usageMonitor(env).check())
   },
 }

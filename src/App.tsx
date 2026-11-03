@@ -300,6 +300,13 @@ type CasinoDailyStat = {
   amount: number
 }
 
+// mirrors UsageSnapshot in worker/src/usage.ts
+type ServerUsage = {
+  checkedAt: number
+  meters: { key: string; label: string; used: number; limit: number; resetsAt: number }[]
+  missing: string[]
+}
+
 type CasinoStatsRange = '7d' | '14d' | '1m' | '3m' | '6m' | '1y'
 type CasinoTrackedGame = 'blackjack' | 'roulette' | 'hilo' | 'mines' | 'plinko' | 'slots' | 'dice' | 'chicken' | 'jetstream'
 
@@ -1514,6 +1521,9 @@ function App() {
   const slotsSpinTokenRef = useRef(0)
   const slotsColumnStopTimeoutsRef = useRef<number[]>([])
   const [leaderboardRemote, setLeaderboardRemote] = useState<LocalPlayerProfile[] | null>(null)
+  const [serverUsage, setServerUsage] = useState<ServerUsage | null>(null)
+  const [serverUsageNote, setServerUsageNote] = useState('')
+  const [serverUsageOpen, setServerUsageOpen] = useState(false)
   const pendingPlinkoDropsRef = useRef<PendingPlinkoDrop[]>([])
   const plinkoLatestBalanceRef = useRef<number | null>(null)
   // one request at a time per game, so a double-click can't send two bets
@@ -1920,6 +1930,40 @@ function App() {
       document.removeEventListener('visibilitychange', handleVisibility)
     }
   }, [playerProfile.id, showsLeaderboard, showsPlayerList])
+
+  // Developer home screen: today's share of the free daily limits. The server
+  // checks them every 15 minutes and pushes a phone alert at 75%, 90% and 100%.
+  useEffect(() => {
+    if (!devMode || !showsLeaderboard) {
+      return
+    }
+    let cancelled = false
+    const refresh = () => {
+      if (document.visibilityState !== 'visible') {
+        return
+      }
+      callCasino<{ usage: ServerUsage }>('admin/usage')
+        .then((reply) => {
+          if (!cancelled) {
+            setServerUsage(reply.usage)
+          }
+        })
+        .catch((error) => console.error('Could not load server usage', error))
+    }
+    refresh()
+    const intervalId = window.setInterval(refresh, 5 * 60_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(intervalId)
+    }
+  }, [devMode, showsLeaderboard, playerProfile.id])
+
+  const handleSendUsageTest = () => {
+    setServerUsageNote('Sending…')
+    callCasino('admin/usage-test')
+      .then(() => setServerUsageNote('Test alert sent. Check your phone.'))
+      .catch((error) => setServerUsageNote(error instanceof Error ? error.message : 'Could not send the test alert.'))
+  }
 
   useEffect(() => {
     pendingPlinkoDropsRef.current = pendingPlinkoDrops
@@ -4691,6 +4735,68 @@ function App() {
     dealerRevealed || dealerHand.length < 2 ? dealerHand : [dealerHand[0]]
   const dealerTotal = getHandValue(dealerVisibleHand)
 
+  const renderServerUsage = (usage: ServerUsage) => {
+    const percentOf = (meter: ServerUsage['meters'][number]) => (meter.limit > 0 ? (meter.used / meter.limit) * 100 : 0)
+    const levelOf = (percent: number) => (percent >= 90 ? 'danger' : percent >= 75 ? 'warn' : 'ok')
+    const busiest = [...usage.meters].sort((a, b) => percentOf(b) - percentOf(a))[0]
+    const busiestPercent = busiest ? percentOf(busiest) : 0
+    const checkedMinutes = Math.max(0, Math.round((Date.now() - usage.checkedAt) / 60_000))
+    const formatReset = (resetsAt: number) =>
+      new Date(resetsAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+
+    return (
+      <section className={`home__usage home__usage--${levelOf(busiestPercent)}`} aria-label="Free plan usage today">
+        <div className="home__usage-head">
+          <p className="home__panel-label">Free plan today</p>
+          <p className="home__usage-summary">
+            {busiest
+              ? `Busiest: ${busiest.label} at ${Math.floor(busiestPercent)}%`
+              : 'No usage numbers yet'}
+            <span> · checked {checkedMinutes === 0 ? 'just now' : `${checkedMinutes}m ago`}</span>
+          </p>
+          <button type="button" className="home__usage-button" onClick={() => setServerUsageOpen((open) => !open)}>
+            {serverUsageOpen ? 'Hide' : 'Details'}
+          </button>
+        </div>
+        {serverUsageOpen ? (
+          <div className="home__usage-details">
+            <ul className="home__usage-meters">
+              {usage.meters.map((meter) => {
+                const percent = percentOf(meter)
+                return (
+                  <li key={meter.key} className={`home__usage-meter home__usage-meter--${levelOf(percent)}`}>
+                    <span className="home__usage-name">{meter.label}</span>
+                    <span className="home__usage-bar">
+                      <span style={{ width: `${Math.min(100, percent)}%` }} />
+                    </span>
+                    <span className="home__usage-count">
+                      {Math.floor(percent)}% · {Math.round(meter.used).toLocaleString('en-US')} /{' '}
+                      {meter.limit.toLocaleString('en-US')} · resets {formatReset(meter.resetsAt)}
+                    </span>
+                  </li>
+                )
+              })}
+            </ul>
+            {usage.missing.map((entry) => (
+              <p key={entry} className="home__usage-missing">
+                Not tracked — {entry}
+              </p>
+            ))}
+            <div className="home__usage-foot">
+              <button type="button" className="home__usage-button" onClick={handleSendUsageTest}>
+                Send test alert
+              </button>
+              <span>
+                {serverUsageNote ||
+                  'Phone alerts go out at 75%, 90% and 100%. Cloudflare limits are shared by every Worker on your account.'}
+              </span>
+            </div>
+          </div>
+        ) : null}
+      </section>
+    )
+  }
+
   return (
     <main className={devMode ? 'dev-mode' : undefined}>
       <div className="app-stage">
@@ -4838,6 +4944,8 @@ function App() {
                     </ol>
                   </article>
                 </section>
+
+                {devMode && serverUsage ? renderServerUsage(serverUsage) : null}
 
                 <section className="home__floor" aria-label="Games">
                   <div className="home__floor-head">
