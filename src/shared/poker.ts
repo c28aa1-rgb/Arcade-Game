@@ -62,6 +62,9 @@ export type PokerRoomState = {
   seats: (PokerSeat | null)[]
   game: PokerGameState | null
   pendingStart: PokerPendingStart | null
+  // everyone's stack as the current hand was dealt (before blinds); if a table
+  // is closed mid-hand, the hand is voided and these are what get returned
+  handStartChips?: Record<string, number> | null
 }
 
 export type PokerResult = { room: PokerRoomState } | { error: string }
@@ -425,6 +428,9 @@ export const startPokerHand = (room: PokerRoomState): PokerRoomState => {
     ),
     dealerSeatIndex: nextDealerSeatIndex,
     pendingStart: null,
+    handStartChips: Object.fromEntries(
+      room.seats.filter(Boolean).map((seat) => [seat!.id, room.playerChips[seat!.id] ?? 0]),
+    ),
     game: {
       handId: (room.game?.actionId ?? 0) + 1,
       street: 'preflop' as PokerStreet,
@@ -461,6 +467,16 @@ export const startPokerHand = (room: PokerRoomState): PokerRoomState => {
   }
 }
 
+// After a pot is paid, every player's in-hand stack matches their table stack,
+// so the seat badges and "Your markers" show the winnings straight away.
+const settleHandChips = (players: Record<string, PokerPlayerState>, playerChips: Record<string, number>) =>
+  Object.fromEntries(
+    Object.entries(players).map(([playerId, player]) => [
+      playerId,
+      { ...player, chips: playerChips[playerId] ?? player.chips },
+    ]),
+  ) as Record<string, PokerPlayerState>
+
 const resolvePokerShowdown = (room: PokerRoomState): PokerRoomState => {
   if (!room.game) {
     return room
@@ -496,8 +512,10 @@ const resolvePokerShowdown = (room: PokerRoomState): PokerRoomState => {
   return {
     ...room,
     playerChips: nextPlayerChips,
+    handStartChips: null,
     game: {
       ...game,
+      players: settleHandChips(game.players, nextPlayerChips),
       street: 'showdown',
       activeSeatIndex: -1,
       actionId: game.actionId + 1,
@@ -530,14 +548,18 @@ const advancePokerStreet = (room: PokerRoomState): PokerRoomState => {
       return room
     }
 
+    const nextPlayerChips = {
+      ...room.playerChips,
+      [winningSeat.id]: (room.playerChips[winningSeat.id] ?? room.buyIn) + game.pot,
+    }
+
     return {
       ...room,
-      playerChips: {
-        ...room.playerChips,
-        [winningSeat.id]: (room.playerChips[winningSeat.id] ?? room.buyIn) + game.pot,
-      },
+      playerChips: nextPlayerChips,
+      handStartChips: null,
       game: {
         ...game,
+        players: settleHandChips(game.players, nextPlayerChips),
         street: 'showdown',
         activeSeatIndex: -1,
         actionId: game.actionId + 1,

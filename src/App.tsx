@@ -2143,7 +2143,14 @@ function App() {
         setPokerPlayerChips({})
         setPokerSeats(Array.from({ length: 6 }, () => null))
         setPokerPendingStart(null)
-        setPokerMessage('That poker room is no longer active.')
+        setPokerGame(null)
+        setPokerMessage(
+          'This table has closed (tables close after 30 minutes without play). Any chips you had there are back in your bankroll.',
+        )
+        // pick up the chips the table returned
+        callCasino('player/me')
+          .then((session) => setBankroll(session.balance))
+          .catch(() => undefined)
         return
       }
 
@@ -7201,7 +7208,7 @@ function App() {
                             {pokerYouState ? (
                               <div className="roulette-summary__row">
                                 <span>Your markers</span>
-                                <strong>{formatPoints(pokerYouState.chips)}</strong>
+                                <strong>{formatPoints(pokerPlayerChips[pokerPlayerId] ?? pokerYouState.chips)}</strong>
                               </div>
                             ) : null}
                             {pokerYouSeat ? (
@@ -7603,9 +7610,6 @@ function App() {
           <div className="poker-modal__card poker-modal__card--dev">
             <p className="bet-panel__label">Developer Access</p>
             <h3>Sign in with Google</h3>
-            <p className="roulette-stage__status dev-auth__note">
-              Developer mode is only for {DEVELOPER_EMAIL}.
-            </p>
             {devModeError ? <p className="bet-panel__error">{devModeError}</p> : null}
             <div className="poker-modal__actions">
               <button

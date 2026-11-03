@@ -38,6 +38,11 @@ export type PokerAction =
 
 const cleanName = (value: unknown) => String(value ?? '').trim().slice(0, 24)
 
+// A table nobody has acted at for this long is closed and cleared out, so idle
+// tables don't pile up. Every action pushes the deadline back.
+const DEFAULT_IDLE_MINUTES = 30
+const EMPTY_TABLE_MINUTES = 10
+
 export class PokerTable extends DurableObject<Env> {
   private room: PokerRoomState | null = null
   private owners: Record<string, string> = {}
@@ -63,6 +68,10 @@ export class PokerTable extends DurableObject<Env> {
     if (!room) {
       return
     }
+
+    const seated = room.seats.some(Boolean)
+    const idleMinutes = Number(this.env.POKER_IDLE_MINUTES) || DEFAULT_IDLE_MINUTES
+    await this.ctx.storage.setAlarm(Date.now() + (seated ? idleMinutes : Math.min(idleMinutes, EMPTY_TABLE_MINUTES)) * 60_000)
 
     const writes: FirestoreWrite[] = [
       { kind: 'set', path: `pokerRooms/${room.code}`, data: { ...publicPokerRoom(room), updatedAt: new Date().toISOString() } },
@@ -132,6 +141,12 @@ export class PokerTable extends DurableObject<Env> {
           if ('error' in result) {
             return { ok: false as const, error: result.error, room: publicPokerRoom(room) }
           }
+          // the last player out closes the table straight away
+          if (!result.room.seats.some(Boolean)) {
+            this.room = result.room
+            await this.closeRoom()
+            return { ok: true as const, room: null, hand: null, ...extra }
+          }
           const dealt = Boolean(result.room.game) && result.room.game!.handId !== room.game?.handId
           await this.persist(result.room, dealt)
           return this.view(caller, extra)
@@ -191,21 +206,53 @@ export class PokerTable extends DurableObject<Env> {
     })
   }
 
-  // developer: close the table, returning everyone's chips to their bankrolls
-  async close(caller: Caller) {
+  // Close the table for good: everyone's chips go back to their bankrolls (a
+  // hand still in progress is voided, so each player gets back what they had
+  // when it was dealt), the public records are deleted and this table's
+  // storage is wiped.
+  private async closeRoom() {
+    const room = this.room
+    if (room) {
+      const handInProgress = Boolean(room.game && room.game.street !== 'showdown' && room.handStartChips)
+      const refunds = { ...room.playerChips, ...(handInProgress ? room.handStartChips! : {}) }
+      for (const [playerId, chips] of Object.entries(refunds)) {
+        if (chips > 0) {
+          const system: Caller = { playerId, uid: this.owners[playerId] ?? '', isDeveloper: true }
+          await this.vault(playerId).pokerWithdraw(system, chips)
+        }
+      }
+
+      const playerIds = new Set([
+        ...Object.keys(this.owners),
+        ...Object.keys(room.playerChips),
+        ...Object.keys(room.game?.players ?? {}),
+      ])
+      await this.publishChain
+      await commitWrites(this.env, [
+        { kind: 'delete', path: `pokerRooms/${room.code}` },
+        ...[...playerIds].map((playerId) => ({ kind: 'delete' as const, path: `pokerRooms/${room.code}/hands/${playerId}` })),
+      ]).catch((error) => console.error('poker cleanup failed', error))
+    }
+
+    this.room = null
+    this.owners = {}
+    await this.ctx.storage.deleteAlarm()
+    await this.ctx.storage.deleteAll()
+  }
+
+  // nobody has played here for a while
+  async alarm() {
+    await this.ctx.blockConcurrencyWhile(async () => {
+      await this.load()
+      await this.closeRoom()
+    })
+  }
+
+  // developer: close a table right now
+  async close(_caller: Caller) {
     return this.ctx.blockConcurrencyWhile(async () => {
       await this.load()
-      if (this.room) {
-        for (const [playerId, chips] of Object.entries(this.room.playerChips)) {
-          if (chips > 0) {
-            await this.vault(playerId).pokerWithdraw({ ...caller, playerId }, chips)
-          }
-        }
-        await commitWrites(this.env, [{ kind: 'delete', path: `pokerRooms/${this.room.code}` }]).catch(() => false)
-      }
-      this.room = null
-      this.owners = {}
-      await this.ctx.storage.deleteAll()
+      await this.closeRoom()
       return { ok: true as const }
     })
   }

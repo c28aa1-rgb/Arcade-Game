@@ -10,6 +10,8 @@ export type Env = {
   DEVELOPER_EMAIL: string
   ALLOWED_ORIGINS: string
   FIREBASE_SERVICE_ACCOUNT?: string
+  // how long a poker table may sit without any action before it closes
+  POKER_IDLE_MINUTES?: string
 }
 
 type FirestoreValue =
