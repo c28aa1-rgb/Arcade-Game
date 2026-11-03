@@ -114,7 +114,7 @@ export const signInAsDeveloper = async () => {
   }
 
   const provider = new GoogleAuthProvider()
-  provider.setCustomParameters({ hd: 'dalton.org', login_hint: DEVELOPER_EMAIL, prompt: 'select_account' })
+  provider.setCustomParameters({ prompt: 'select_account' })
 
   let user: User
   try {
@@ -126,7 +126,7 @@ export const signInAsDeveloper = async () => {
   if (!isDeveloperUser(user)) {
     const email = user.email ?? 'that account'
     await signOut(developerAuth)
-    throw new Error(`${email} can't use developer mode. Only ${DEVELOPER_EMAIL} can.`)
+    throw new Error(`${email} can't use developer mode.`)
   }
   return user.email!
 }

@@ -102,9 +102,13 @@ const HIDDEN_CARD: Card = { rank: '', suit: '' }
 
 const todayKeyUtc = () => new Date().toISOString().slice(0, 10)
 
+const LEADERBOARD_SYNC_MS = 10_000
+const RATE_WINDOW_MS = 10_000
+const RATE_LIMIT = 25
+
 export class PlayerVault extends DurableObject<Env> {
   private state: VaultState | null = null
-  private syncChain: Promise<unknown> = Promise.resolve()
+  private recentRequests: number[] = []
 
   // ---------- plumbing ----------
 
@@ -149,16 +153,47 @@ export class PlayerVault extends DurableObject<Env> {
   private async save(state: VaultState) {
     this.state = state
     await this.ctx.storage.put('state', state)
-    // mirror the public numbers to the leaderboard, in order, off the hot path
-    const snapshot = {
-      bankroll: state.balance,
-      ownerUid: state.ownerUid,
-      dailyRewardStreak: state.dailyStreak,
-      lastDailyRewardClaimDate: state.lastDailyClaim,
+    // The leaderboard copy is written at most once per 10 seconds per player
+    // (the latest numbers win), so a flood of bets can't burn through the
+    // database's daily write allowance.
+    if ((await this.ctx.storage.getAlarm()) === null) {
+      await this.ctx.storage.setAlarm(Date.now() + LEADERBOARD_SYNC_MS)
     }
-    this.syncChain = this.syncChain
-      .then(() => commitWrites(this.env, [{ kind: 'merge', path: `players/${state.playerId}`, data: snapshot }]))
-      .catch((error) => console.error('leaderboard sync failed', error))
+  }
+
+  async alarm() {
+    const state = this.state ?? (await this.ctx.storage.get<VaultState>('state')) ?? null
+    if (!state) {
+      return
+    }
+    try {
+      await commitWrites(this.env, [
+        {
+          kind: 'merge',
+          path: `players/${state.playerId}`,
+          data: {
+            bankroll: state.balance,
+            ownerUid: state.ownerUid,
+            dailyRewardStreak: state.dailyStreak,
+            lastDailyRewardClaimDate: state.lastDailyClaim,
+          },
+        },
+      ])
+    } catch (error) {
+      console.error('leaderboard sync failed; retrying', error)
+      await this.ctx.storage.setAlarm(Date.now() + 60_000)
+    }
+  }
+
+  // A person clicking plays a few rounds a second at most; a script firing
+  // hundreds is turned away before it can use up the free daily limits.
+  private checkRate() {
+    const now = Date.now()
+    this.recentRequests = this.recentRequests.filter((time) => now - time < RATE_WINDOW_MS)
+    if (this.recentRequests.length >= RATE_LIMIT) {
+      fail('Slow down a little and try again.')
+    }
+    this.recentRequests.push(now)
   }
 
   private requireBet(state: VaultState, bet: unknown) {
@@ -177,10 +212,12 @@ export class PlayerVault extends DurableObject<Env> {
   private run(caller: Caller, action: (state: VaultState) => Record<string, unknown>): Promise<VaultResponse> {
     return this.ctx.blockConcurrencyWhile(async (): Promise<VaultResponse> => {
       try {
+        this.checkRate()
         const state = await this.load(caller)
         const working: VaultState = structuredClone(state)
         const result = action(working)
-        working.balance = normalizeBankroll(working.balance)
+        // balances are kept to the cent, so rounding can never be farmed
+        working.balance = Math.max(0, roundMoney(working.balance))
         await this.save(working)
         return { ok: true, balance: working.balance, ...result }
       } catch (error) {
@@ -202,6 +239,7 @@ export class PlayerVault extends DurableObject<Env> {
   async authorize(caller: Caller): Promise<VaultResponse> {
     return this.ctx.blockConcurrencyWhile(async (): Promise<VaultResponse> => {
       try {
+        this.checkRate()
         const state = await this.load(caller)
         return { ok: true, balance: state.balance }
       } catch (error) {
@@ -234,7 +272,7 @@ export class PlayerVault extends DurableObject<Env> {
     if (game === 'hilo' && state.hilo) {
       const round = state.hilo
       state.hilo = undefined
-      const payout = round.streak > 0 ? Math.round(round.bet * round.multiplier) : 0
+      const payout = round.streak > 0 ? roundMoney(round.bet * round.multiplier) : 0
       state.balance += payout
       return { game, payout }
     }
@@ -243,7 +281,7 @@ export class PlayerVault extends DurableObject<Env> {
       const round = state.mines
       state.mines = undefined
       const payout =
-        round.revealed.length > 0 ? Math.round(round.bet * getMinesMultiplier(round.revealed.length, round.mineCount)) : 0
+        round.revealed.length > 0 ? roundMoney(round.bet * getMinesMultiplier(round.revealed.length, round.mineCount)) : 0
       state.balance += payout
       return { game, payout }
     }
@@ -315,7 +353,7 @@ export class PlayerVault extends DurableObject<Env> {
       const values = rollTwentyDice()
       const total = getDiceTotal(values)
       const won = mode === 'lower' ? total < target : total > target
-      const payout = won ? Math.round(bet * multiplier) : 0
+      const payout = won ? roundMoney(bet * multiplier) : 0
       state.balance += payout - bet
       return { values, total, won, payout, delta: payout - bet, target, mode, multiplier }
     })
@@ -551,7 +589,7 @@ export class PlayerVault extends DurableObject<Env> {
       if (round.streak === 0) {
         fail('Win at least one guess before cashing out.')
       }
-      const payout = Math.round(round.bet * round.multiplier)
+      const payout = roundMoney(round.bet * round.multiplier)
       state.balance += payout
       state.hilo = undefined
       return { payout, streak: round.streak, bet: round.bet }
@@ -594,7 +632,7 @@ export class PlayerVault extends DurableObject<Env> {
       const multiplier = getMinesMultiplier(revealed.length, round.mineCount)
 
       if (revealed.length === MINES_TILE_COUNT - round.mineCount) {
-        const payout = Math.round(round.bet * multiplier)
+        const payout = roundMoney(round.bet * multiplier)
         state.balance += payout
         state.mines = undefined
         return {
@@ -621,7 +659,7 @@ export class PlayerVault extends DurableObject<Env> {
         fail('Pick at least one safe tile first.')
       }
       const multiplier = getMinesMultiplier(round.revealed.length, round.mineCount)
-      const payout = Math.round(round.bet * multiplier)
+      const payout = roundMoney(round.bet * multiplier)
       state.balance += payout
       state.mines = undefined
       return { payout, safePicks: round.revealed.length, multiplier, mineIds: round.mineIds, bet: round.bet }
@@ -792,6 +830,7 @@ export class PlayerVault extends DurableObject<Env> {
 
   async adminDelete(caller: Caller) {
     this.state = null
+    await this.ctx.storage.deleteAlarm()
     await this.ctx.storage.deleteAll()
     await commitWrites(this.env, [{ kind: 'delete', path: `players/${caller.playerId}` }]).catch((error) =>
       console.error('delete failed', error),

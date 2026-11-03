@@ -2,7 +2,6 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type 
 import { createPortal } from 'react-dom'
 import { collection, deleteDoc, doc, getDoc, onSnapshot, setDoc } from 'firebase/firestore'
 import {
-  DEVELOPER_EMAIL,
   developerFirestore,
   ensurePlayerSession,
   firebaseConfigError,
@@ -2026,7 +2025,7 @@ function App() {
     }
   }, [devMode])
 
-  // Developer mode is unlocked by signing in with Google as DEVELOPER_EMAIL.
+  // Developer mode is unlocked by signing in with the developer's Google account.
   const handleDeveloperSignIn = async () => {
     setDevModeVerifying(true)
     setDevModeError('')
@@ -7642,9 +7641,6 @@ function App() {
           <div className="poker-modal__card poker-modal__card--dev">
             <p className="bet-panel__label">Reset Statistics</p>
             <h3>Sign in to reset {casinoStatsResetScopeLabel}</h3>
-            <p className="roulette-stage__status dev-auth__note">
-              Only {DEVELOPER_EMAIL} can reset statistics.
-            </p>
             {casinoStatsResetError ? <p className="bet-panel__error">{casinoStatsResetError}</p> : null}
             <div className="poker-modal__actions">
               <button
