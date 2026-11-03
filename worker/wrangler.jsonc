@@ -1,0 +1,23 @@
+{
+  // UES Underground Casino game server. Every bet is decided here; the page
+  // only animates the result.
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "ues-casino",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "observability": { "enabled": true },
+  "durable_objects": {
+    "bindings": [
+      { "name": "PLAYERS", "class_name": "PlayerVault" },
+      { "name": "TABLES", "class_name": "PokerTable" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["PlayerVault", "PokerTable"] }],
+  "vars": {
+    "FIREBASE_PROJECT_ID": "lumex-arcade",
+    "DEVELOPER_EMAIL": "c28aa1@dalton.org",
+    "ALLOWED_ORIGINS": "https://c28aa1-rgb.github.io,http://localhost:5180,http://localhost:5173,http://p2.localhost:5180,http://p3.localhost:5180,http://p4.localhost:5180"
+  }
+  // secret: FIREBASE_SERVICE_ACCOUNT (the Firebase service-account key JSON),
+  // set with `npx wrangler secret put FIREBASE_SERVICE_ACCOUNT`
+}

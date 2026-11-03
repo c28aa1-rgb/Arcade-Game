@@ -17,11 +17,14 @@ import {
   type Ball,
   type Peg,
 } from './plinkoPhysics'
+import { seededRandom } from '../shared/random'
 
 type PendingPlinkoDrop = {
   id: string
   bet: number
   centerBias: number
+  // the server's drop: replaying it from this seed lands in the same slot
+  seed: number
 }
 
 type PlinkoBoardProps = {
@@ -31,7 +34,7 @@ type PlinkoBoardProps = {
   onBallSettled?: (dropId: string, slotIndex: number) => void | Promise<void>
 }
 
-type ActiveBall = Ball & { id: string; color: string }
+type ActiveBall = Ball & { id: string; color: string; rng: () => number }
 
 const PEG_DRAW_RADIUS = PEG_RADIUS + 0.4
 const PEG_VISUAL_Y_SCALE = 0.988
@@ -211,8 +214,9 @@ export default function PlinkoBoard({ rows, multipliers, pendingDrops, onBallSet
       const next = [...current]
 
       dropsToSpawn.forEach((drop) => {
-        const ball = spawnBall(rowStep, drop.centerBias ?? 0)
-        next.push({ ...ball, id: drop.id, color: getBallColor(drop.id) })
+        const rng = seededRandom(drop.seed)
+        const ball = spawnBall(rowStep, drop.centerBias ?? 0, rng)
+        next.push({ ...ball, id: drop.id, color: getBallColor(drop.id), rng })
         spawnedDropIdsRef.current.add(drop.id)
       })
 
@@ -224,6 +228,7 @@ export default function PlinkoBoard({ rows, multipliers, pendingDrops, onBallSet
   useEffect(() => {
     let rafId = 0
     let lastTs = performance.now()
+    let accumulated = 0
 
     const tick = (ts: number) => {
       const dt = Math.min(MAX_FRAME_DT_S, Math.max(0.001, (ts - lastTs) / 1000))
@@ -233,14 +238,17 @@ export default function PlinkoBoard({ rows, multipliers, pendingDrops, onBallSet
       if (current.length > 0) {
         const landed: { id: string; slotIndex: number }[] = []
         let stepBalls = current
-        const steps = Math.max(1, Math.ceil(dt / SIMULATION_STEP_S))
-        const stepDt = dt / steps
+        // fixed-size steps, exactly like the server's simulation, so each
+        // ball traces the same path it was dealt
+        accumulated += dt
+        const steps = Math.floor(accumulated / SIMULATION_STEP_S)
+        accumulated -= steps * SIMULATION_STEP_S
 
         for (let step = 0; step < steps; step += 1) {
           const nextStepBalls: ActiveBall[] = []
 
           for (const ball of stepBalls) {
-            const result = stepBall(ball, stepDt, pegs, slotLeft, multipliers.length)
+            const result = stepBall(ball, SIMULATION_STEP_S, pegs, slotLeft, multipliers.length, ball.rng)
             if (result.next) {
               // stepBall spreads the ball, so id + color are preserved
               nextStepBalls.push(result.next as ActiveBall)
@@ -262,6 +270,8 @@ export default function PlinkoBoard({ rows, multipliers, pendingDrops, onBallSet
             void onBallSettledRef.current?.(entry.id, entry.slotIndex)
           })
         }
+      } else {
+        accumulated = 0
       }
 
       rafId = window.requestAnimationFrame(tick)

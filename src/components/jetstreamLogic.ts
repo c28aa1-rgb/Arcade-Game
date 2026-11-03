@@ -13,6 +13,8 @@
 // therefore exactly RTP on every speed; faster speeds just swing harder
 // (bigger pickups, more rockets, fewer landings).
 
+import { random } from '../shared/random'
+
 export type JetSpeed = 'slow' | 'normal' | 'fast' | 'turbo'
 export type JetEventType = 'add' | 'mult' | 'rocket'
 
@@ -117,7 +119,7 @@ export const JET_LAND_CHANCE: Record<JetSpeed, number> = {
 }
 
 function pick(table: Weighted): number {
-  const r = Math.random()
+  const r = random()
   let acc = 0
   for (const [value, p] of table) {
     acc += p
@@ -132,14 +134,14 @@ function trimNumber(v: number): string {
 
 export function generateFlight(speed: JetSpeed): JetFlight {
   const cfg = JET_SPEEDS[speed]
-  const count = cfg.events[0] + Math.floor(Math.random() * (cfg.events[1] - cfg.events[0] + 1))
+  const count = cfg.events[0] + Math.floor(random() * (cfg.events[1] - cfg.events[0] + 1))
   const events: JetEvent[] = []
   let counter = 1
   let lift = 0.45
   for (let i = 0; i < count; i += 1) {
     // altitude wanders smoothly rather than jumping around
-    lift = Math.max(0.05, Math.min(0.95, lift + (Math.random() - 0.5) * 0.7))
-    const r = Math.random()
+    lift = Math.max(0.05, Math.min(0.95, lift + (random() - 0.5) * 0.7))
+    const r = random()
     if (r < cfg.weights.add) {
       const v = pick(cfg.add)
       counter += v
@@ -156,19 +158,19 @@ export function generateFlight(speed: JetSpeed): JetFlight {
     events[i].counterAfter = counter
   }
 
-  const landed = Math.random() < JET_LAND_CHANCE[speed]
+  const landed = random() < JET_LAND_CHANCE[speed]
   let downedAt: number | null = null
   if (!landed) {
     const rockets = events.map((e, i) => (e.type === 'rocket' ? i : -1)).filter((i) => i >= 0)
-    if (rockets.length > 0 && Math.random() < 0.45) {
-      downedAt = rockets[Math.floor(Math.random() * rockets.length)]
+    if (rockets.length > 0 && random() < 0.45) {
+      downedAt = rockets[Math.floor(random() * rockets.length)]
     }
   }
   const lastReached = downedAt ?? events.length - 1
   const endCounter = lastReached >= 0 ? events[lastReached].counterAfter : 1
 
   return {
-    id: `flight-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    id: `flight-${Date.now()}-${random().toString(36).slice(2, 8)}`,
     speed,
     events,
     landed,

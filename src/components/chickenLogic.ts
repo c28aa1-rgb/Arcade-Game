@@ -12,6 +12,8 @@
 // s[i] = S[i] / S[i-1] = m[i-1] / m[i] (with a virtual m[0] = RTP for the very
 // first hop). This is the same math real provably-fair crash/chicken games use.
 
+import { random } from '../shared/random'
+
 export type ChickenDifficulty = 'easy' | 'medium' | 'hard' | 'daredevil'
 
 export const CHICKEN_LANES = 24
@@ -91,7 +93,7 @@ export function getChickenConfig(difficulty: ChickenDifficulty): ChickenDifficul
 // Roll the hop onto `laneIndex` (0-based). Returns true if the chicken survives.
 export function rollChickenHop(config: ChickenDifficultyConfig, laneIndex: number): boolean {
   const chance = config.survival[laneIndex] ?? 0
-  return Math.random() < chance
+  return random() < chance
 }
 
 export function formatChickenMultiplier(value: number): string {

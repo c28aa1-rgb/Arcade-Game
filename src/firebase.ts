@@ -70,6 +70,12 @@ export const ensurePlayerSession = () => {
   return playerSession
 }
 
+// The signed proof of this browser's session that the game server checks.
+export const getPlayerIdToken = async () => {
+  const uid = await ensurePlayerSession()
+  return uid && playerAuth?.currentUser ? playerAuth.currentUser.getIdToken() : null
+}
+
 // ---------- developer session ----------
 
 // Developer access: a Google sign-in that only one account can pass. The
@@ -129,6 +135,16 @@ export const signOutDeveloper = async () => {
   if (developerAuth?.currentUser) {
     await signOut(developerAuth)
   }
+}
+
+// Sent alongside player requests so the server can show developer extras
+// (mine positions, the next hi-lo card, everyone's poker hands).
+export const getDeveloperIdToken = async () => {
+  if (!developerAuth) {
+    return null
+  }
+  await developerAuth.authStateReady()
+  return isDeveloperUser(developerAuth.currentUser) ? developerAuth.currentUser!.getIdToken() : null
 }
 
 export const watchDeveloperSession = (onChange: (isDeveloper: boolean) => void) => {

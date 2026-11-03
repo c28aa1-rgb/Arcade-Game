@@ -1,9 +1,9 @@
 rules_version = '2';
 
-// Every visitor has a silent (anonymous) Firebase session. A player record is
-// stamped with the uid of the browser that owns it, and only that uid can
-// change it. The developer (a verified Google sign-in as c28aa1@dalton.org) can
-// edit or delete anyone. Anything not listed here is denied.
+// Money lives on the casino game server (a Cloudflare Worker). It writes
+// balances, daily-bonus streaks and poker tables with the Firebase service
+// account, which these rules don't apply to. Browsers can only edit their own
+// profile (name, settings) and can never touch money, streaks or poker tables.
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() {
@@ -17,10 +17,9 @@ service cloud.firestore {
         && request.auth.token.firebase.sign_in_provider == 'google.com';
     }
 
-    function validBankroll() {
-      return request.resource.data.bankroll is number
-        && request.resource.data.bankroll >= 0
-        && request.resource.data.bankroll <= 100000000;
+    // fields only the game server may write
+    function serverOwnedFields() {
+      return ['bankroll', 'dailyRewardStreak', 'lastDailyRewardClaimDate'];
     }
 
     function ownsNewData() {
@@ -31,22 +30,35 @@ service cloud.firestore {
       // the leaderboard is public
       allow read: if true;
 
-      allow create: if isDeveloper()
-        || (signedIn() && ownsNewData() && validBankroll());
+      allow create: if signedIn()
+        && ownsNewData()
+        && !request.resource.data.keys().hasAny(serverOwnedFields());
 
-      // records from before ownership existed are claimed by the first browser
-      // that saves them; after that only the owner (or the developer) can write
+      // a record from before ownership existed is claimed by the first browser
+      // that saves it; after that only the owner can change it, and never the
+      // money or streak fields
+      allow update: if signedIn()
+        && ownsNewData()
+        && resource.data.get('ownerUid', request.auth.uid) == request.auth.uid
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(serverOwnedFields());
+
+      // the developer can rename or lock players (money still goes through the
+      // server) and delete records
       allow update: if isDeveloper()
-        || (signedIn() && ownsNewData() && validBankroll()
-            && resource.data.get('ownerUid', request.auth.uid) == request.auth.uid);
-
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(serverOwnedFields());
       allow delete: if isDeveloper();
     }
 
     match /pokerRooms/{roomCode} {
+      // the table is public; only the server writes it
       allow read: if true;
-      allow create, update: if signedIn();
-      allow delete: if isDeveloper();
+      allow write: if false;
+
+      // each player's own two cards: readable by that player (and the developer)
+      match /hands/{playerId} {
+        allow read: if signedIn() && (resource.data.ownerUid == request.auth.uid || isDeveloper());
+        allow write: if false;
+      }
     }
   }
 }

@@ -30,6 +30,11 @@ export function SuitIcon({ suit, className }: { suit: string; className?: string
 }
 
 export default function CardFace({ rank, suit }: { rank: string; suit: string }) {
+  // a card the server hasn't revealed yet (the dealer's hole card) has no face
+  if (!rank) {
+    return null
+  }
+
   const red = suit === '♥' || suit === '♦'
   const court = rank === 'J' || rank === 'Q' || rank === 'K'
   const label = `${RANK_NAMES[rank] ?? rank} of ${SUIT_NAMES[suit] ?? 'spades'}`

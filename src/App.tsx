@@ -12,6 +12,65 @@ import {
   signOutDeveloper,
   watchDeveloperSession,
 } from './firebase'
+import { CasinoError, casinoCall, type CasinoResponse } from './casinoApi'
+import {
+  BANKROLL,
+  type Card,
+  DEFAULT_MINES_COUNT,
+  DICE_COUNT,
+  DICE_MAX_TOTAL,
+  DICE_MIN_TOTAL,
+  type DiceMode,
+  getDailyRewardAmountForDay,
+  getDateKeyDistance,
+  clampDiceTarget,
+  getDiceMultiplier,
+  getDiceTotal,
+  getDiceWinChance,
+  getHandValue,
+  type HiLoOdds,
+  getMinesMultiplier,
+  getRandomSlotSymbol,
+  getRouletteBetDisplayLabel,
+  getSlotJackpotValues,
+  getSlotsWinningCells,
+  createInitialSlotsGrid,
+  createSlotsBonusGridFromSpin,
+  isSameRouletteBet,
+  MIN_BET,
+  MINES_MAX_COUNT,
+  MINES_MIN_COUNT,
+  MINES_TILE_COUNT,
+  normalizeBankroll,
+  PLINKO_MULTIPLIERS,
+  PLINKO_ROWS,
+  ROULETTE_RED_NUMBERS,
+  ROULETTE_WHEEL_ORDER,
+  type RouletteBet,
+  type RoulettePocket,
+  type RoundResult,
+  rollTwentyDice,
+  roundMoney,
+  SLOT_COLUMNS,
+  SLOT_ROWS,
+  type SlotCell,
+  type SlotRegularSymbol,
+} from './shared/casino'
+import {
+  DEFAULT_BIG_BLIND,
+  DEFAULT_SMALL_BLIND,
+  getPokerAmountToCall,
+  getPokerBlindSeatIndexes,
+  getPokerChipTokens,
+  getPokerRoomMessage,
+  type PokerActionType,
+  type PokerGameState,
+  type PokerPendingStart,
+  type PokerPlayerState,
+  type PokerRoomState,
+  type PokerSeat,
+  type PokerStreet,
+} from './shared/poker'
 import PlinkoBoard from './components/PlinkoBoard'
 import ChickenRoad, { type ChickenStatus } from './components/ChickenRoad'
 import CardFace from './components/CardFace'
@@ -38,22 +97,7 @@ import {
   type ChickenDifficulty,
 } from './components/chickenLogic'
 
-type RoulettePocket = number | '00'
-
-const MIN_BET = 10
-const BANKROLL = 1000
-const DICE_COUNT = 20
 const DICE_ROW_COUNT = 10
-const DICE_MIN_TOTAL = DICE_COUNT
-const DICE_MAX_TOTAL = DICE_COUNT * 6
-const DICE_MAX_MULTIPLIER = 1000
-const MINES_GRID_SIZE = 5
-const MINES_TILE_COUNT = MINES_GRID_SIZE * MINES_GRID_SIZE
-const MINES_MIN_COUNT = 5
-const MINES_MAX_COUNT = 24
-const DEFAULT_MINES_COUNT = 5
-const MINES_EDGE = 0.99
-const HILO_HOUSE_EDGE = 0.99
 const DEV_MODE_TRIGGER_KEY = '-'
 const DEV_MODE_SESSION_KEY = 'dalton-casino-dev-mode'
 const PLAYER_ID_STORAGE_KEY = 'dalton-casino-player-id'
@@ -62,16 +106,6 @@ const PLAYER_PENDING_CASHOUT_STORAGE_PREFIX = 'dalton-casino-pending-cashout:'
 const PLAYER_DAILY_STATS_STORAGE_PREFIX = 'dalton-casino-player-daily-stats:'
 const CASINO_DAILY_STATS_STORAGE_KEY = 'codex-casino-daily-stats'
 const CASINO_GAME_DAILY_STATS_STORAGE_PREFIX = 'codex-casino-game-daily-stats:'
-const PLINKO_ROWS = 12
-const PLINKO_MULTIPLIERS = [24, 7.5, 3.8, 1.4, 0.8, 0.6, 0.35, 0.6, 0.8, 1.4, 3.8, 7.5, 24]
-const SLOT_ROWS = 3
-const SLOT_COLUMNS = 5
-const SUITS = ['♠', '♥', '♦', '♣']
-const RANKS = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K']
-const ROULETTE_WHEEL_ORDER: RoulettePocket[] = [
-  0, 28, 9, 26, 30, 11, 7, 20, 32, 17, 5, 22, 34, 15, 3, 24, 36, 13, 1, '00', 27, 10,
-  25, 29, 12, 8, 19, 31, 18, 6, 21, 33, 16, 4, 23, 35, 14, 2,
-]
 const ROULETTE_NUMBERS = [
   '1',
   '4',
@@ -110,27 +144,6 @@ const ROULETTE_NUMBERS = [
   '33',
   '36',
 ]
-const ROULETTE_RED_NUMBERS = new Set([
-  '1',
-  '3',
-  '5',
-  '7',
-  '9',
-  '12',
-  '14',
-  '16',
-  '18',
-  '19',
-  '21',
-  '23',
-  '25',
-  '27',
-  '30',
-  '32',
-  '34',
-  '36',
-])
-
 const ROULETTE_COLUMNS = [
   { label: '1st Row', value: 'column-1' as const },
   { label: '2nd Row', value: 'column-2' as const },
@@ -263,60 +276,7 @@ const normalizeRotation = (value: number) => {
   return normalized < 0 ? normalized + 360 : normalized
 }
 
-const getRouletteBetDisplayLabel = (bet: RouletteBet | null) => {
-  if (!bet) {
-    return 'None'
-  }
-
-  if (bet.kind === 'number') {
-    return `Number ${bet.value}`
-  }
-
-  if (bet.kind === 'color') {
-    return bet.value === 'red' ? 'Red' : 'Black'
-  }
-
-  if (bet.kind === 'parity') {
-    return bet.value === 'odd' ? 'Odd' : 'Even'
-  }
-
-  if (bet.kind === 'column') {
-    return bet.value === 'column-1'
-      ? '1st Row'
-      : bet.value === 'column-2'
-        ? '2nd Row'
-        : '3rd Row'
-  }
-
-  if (bet.kind === 'range') {
-    if (bet.value === '1-18') {
-      return '1st Half'
-    }
-
-    if (bet.value === '19-36') {
-      return '2nd Half'
-    }
-  }
-
-  return bet.value
-}
-
-const isSameRouletteBet = (left: RouletteBet, right: RouletteBet) =>
-  left.kind === right.kind && left.value === right.value
-
-const normalizeBankroll = (value: number) => Math.max(0, Math.round(value))
 const roundSignedMoney = (value: number) => Math.round(value)
-
-type Card = {
-  rank: string
-  suit: string
-}
-
-type RoundResult = {
-  message: string
-  delta: number
-  payout: number
-}
 
 type LocalPlayerProfile = {
   id: string
@@ -344,16 +304,15 @@ type CasinoDailyStat = {
 type CasinoStatsRange = '7d' | '14d' | '1m' | '3m' | '6m' | '1y'
 type CasinoTrackedGame = 'blackjack' | 'roulette' | 'hilo' | 'mines' | 'plinko' | 'slots' | 'dice' | 'chicken' | 'jetstream'
 
-type SlotRegularSymbol = 'dragon' | 'moon' | 'gem' | 'crown' | 'lotus'
-type SlotJackpot = 'mini' | 'minor' | 'major'
-type SlotCell =
-  | { kind: 'symbol'; symbol: SlotRegularSymbol }
-  | { kind: 'orb'; value: number; jackpot?: SlotJackpot | null }
-
 type PendingPlinkoDrop = {
   id: string
   bet: number
   centerBias: number
+  // decided by the server: the board replays this exact drop from the seed
+  seed: number
+  slotIndex: number
+  payout: number
+  balanceAfter: number
 }
 
 type PlinkoRound = {
@@ -385,13 +344,6 @@ type JetstreamRound = {
   cashed: boolean
 }
 
-type RouletteBet =
-  | { kind: 'number'; value: RoulettePocket }
-  | { kind: 'color'; value: 'red' | 'black' }
-  | { kind: 'parity'; value: 'odd' | 'even' }
-  | { kind: 'range'; value: '1-18' | '19-36' | '1-12' | '13-24' | '25-36' }
-  | { kind: 'column'; value: 'column-1' | 'column-2' | 'column-3' }
-
 type RouletteBetSlip = {
   id: string
   bet: RouletteBet
@@ -407,47 +359,6 @@ type MinesTile = {
   multiplier?: number // multiplier earned by this safe pick
 }
 
-type DiceMode = 'lower' | 'higher'
-
-type PokerSeat = {
-  id: string
-  name: string
-}
-
-type PokerStreet = 'preflop' | 'flop' | 'turn' | 'river' | 'showdown'
-
-type PokerPlayerState = {
-  chips: number
-  holeCards: Card[]
-  folded: boolean
-  allIn: boolean
-  committed: number
-  acted: boolean
-}
-
-type PokerContribution = {
-  playerId: string
-  amount: number
-}
-
-type PokerActionType = 'start' | 'blind' | 'check' | 'call' | 'raise' | 'fold' | 'street' | 'showdown'
-
-type PokerGameState = {
-  street: PokerStreet
-  activeSeatIndex: number
-  currentBet: number
-  pot: number
-  communityCards: Card[]
-  deck: Card[]
-  players: Record<string, PokerPlayerState>
-  actionId: number
-  lastActorId: string | null
-  lastActionType: PokerActionType
-  lastContributions: PokerContribution[]
-  lastAction: string
-  winnerMessage: string | null
-}
-
 type PokerAnnouncementKind = 'info' | 'check' | 'call' | 'bet' | 'raise' | 'fold' | 'allin' | 'street' | 'win'
 
 type PokerAnnouncement = {
@@ -457,119 +368,9 @@ type PokerAnnouncement = {
   tag?: string
 }
 
-type PokerPendingStart = {
-  buyIn: number
-  playerIds: string[]
-  confirmedPlayerIds: string[]
-}
-
-type PokerRoomState = {
-  code: string
-  buyIn: number
-  smallBlind: number
-  bigBlind: number
-  hostId: string
-  dealerSeatIndex: number
-  playerChips: Record<string, number>
-  seats: (PokerSeat | null)[]
-  game: PokerGameState | null
-  pendingStart: PokerPendingStart | null
-}
-
 const POKER_PLAYER_SESSION_KEY = 'dalton-casino-poker-player-id'
-const DEFAULT_SMALL_BLIND = 5
-const DEFAULT_BIG_BLIND = 10
-const POKER_CHIP_DENOMINATIONS = [
-  { value: 500, color: 'purple' },
-  { value: 100, color: 'black' },
-  { value: 25, color: 'green' },
-  { value: 10, color: 'blue' },
-  { value: 5, color: 'red' },
-  { value: 1, color: 'white' },
-] as const
-
-const getCardValue = (rank: string) => {
-  if (rank === 'A') {
-    return 11
-  }
-
-  if (['K', 'Q', 'J'].includes(rank)) {
-    return 10
-  }
-
-  return Number(rank)
-}
-
 const getSuitColorClass = (suit: string) =>
   suit === '♥' || suit === '♦' ? 'playing-card__suit--red' : 'playing-card__suit--black'
-
-const getHandValue = (hand: Card[]) => {
-  let total = hand.reduce((sum, card) => sum + getCardValue(card.rank), 0)
-  let aces = hand.filter((card) => card.rank === 'A').length
-
-  while (total > 21 && aces > 0) {
-    total -= 10
-    aces -= 1
-  }
-
-  return total
-}
-
-const createShuffledDeck = () => {
-  const deck: Card[] = []
-
-  for (const suit of SUITS) {
-    for (const rank of RANKS) {
-      deck.push({ rank, suit })
-    }
-  }
-
-  for (let index = deck.length - 1; index > 0; index -= 1) {
-    const swapIndex = Math.floor(Math.random() * (index + 1))
-    ;[deck[index], deck[swapIndex]] = [deck[swapIndex], deck[index]]
-  }
-
-  return deck
-}
-
-const drawCards = (currentDeck: Card[], count: number) => {
-  let workingDeck = [...currentDeck]
-
-  if (workingDeck.length < count) {
-    workingDeck = createShuffledDeck()
-  }
-
-  return {
-    drawnCards: workingDeck.slice(0, count),
-    remainingDeck: workingDeck.slice(count),
-  }
-}
-
-const drawRandomCard = (currentDeck: Card[]) => {
-  let workingDeck = [...currentDeck]
-
-  if (workingDeck.length === 0) {
-    workingDeck = createShuffledDeck()
-  }
-
-  const randomIndex = Math.floor(Math.random() * workingDeck.length)
-  const drawnCard = workingDeck[randomIndex]
-  const remainingDeck = workingDeck.filter((_, index) => index !== randomIndex)
-
-  return { drawnCard, remainingDeck }
-}
-
-const removeCardFromDeck = (currentDeck: Card[], targetCard: Card) => {
-  const matchingCardIndex = currentDeck.findIndex(
-    (card) => card.rank === targetCard.rank && card.suit === targetCard.suit,
-  )
-
-  if (matchingCardIndex === -1) {
-    return [...currentDeck]
-  }
-
-  return currentDeck.filter((_, index) => index !== matchingCardIndex)
-}
 
 const createLocalPlayerId = () => `player-${Math.random().toString(36).slice(2, 12)}`
 
@@ -1067,45 +868,6 @@ const getOrCreateLocalPlayerProfile = (): LocalPlayerProfile => {
   return nextProfile
 }
 
-const getHiLoOdds = (
-  deckCards: Card[],
-  currentCard: Card | null,
-  getCardNumericValue: (card: Card | null) => number,
-) => {
-  const currentValue = getCardNumericValue(currentCard)
-
-  if (!currentCard || deckCards.length === 0 || currentValue === 0) {
-    return {
-      higherCount: 0,
-      lowerCount: 0,
-      equalCount: 0,
-      higherProbability: 0,
-      lowerProbability: 0,
-      higherStepMultiplier: 1,
-      lowerStepMultiplier: 1,
-    }
-  }
-
-  const higherCount = deckCards.filter((card) => getCardNumericValue(card) > currentValue).length
-  const lowerCount = deckCards.filter((card) => getCardNumericValue(card) < currentValue).length
-  const equalCount = deckCards.length - higherCount - lowerCount
-  const higherProbability = higherCount / deckCards.length
-  const lowerProbability = lowerCount / deckCards.length
-
-  return {
-    higherCount,
-    lowerCount,
-    equalCount,
-    higherProbability,
-    lowerProbability,
-    higherStepMultiplier:
-      higherProbability > 0 ? Number((HILO_HOUSE_EDGE / higherProbability).toFixed(2)) : 0,
-    lowerStepMultiplier:
-      lowerProbability > 0 ? Number((HILO_HOUSE_EDGE / lowerProbability).toFixed(2)) : 0,
-  }
-}
-
-const roundMoney = (value: number) => Number(value.toFixed(2))
 const formatPoints = (value: number) => `$${Math.round(value).toLocaleString()}`
 const formatSignedPoints = (value: number) => {
   if (value === 0) {
@@ -1212,263 +974,17 @@ const AnimatedMoney = ({ value }: { value: number }) => {
   )
 }
 
-const SLOT_PAYTABLE: Record<SlotRegularSymbol, { 3: number; 4: number; 5: number }> = {
-  dragon: { 3: 8, 4: 20, 5: 60 },
-  crown: { 3: 5, 4: 12, 5: 30 },
-  gem: { 3: 4, 4: 10, 5: 22 },
-  lotus: { 3: 3, 4: 8, 5: 18 },
-  moon: { 3: 2, 4: 6, 5: 14 },
-}
-
-const SLOT_SYMBOL_LABELS: Record<SlotRegularSymbol, string> = {
-  dragon: 'DR',
-  crown: 'CR',
-  gem: 'GM',
-  lotus: 'LT',
-  moon: 'MN',
-}
-
-const SLOT_SYMBOL_POOL: SlotRegularSymbol[] = [
-  'dragon',
-  'dragon',
-  'crown',
-  'crown',
-  'gem',
-  'gem',
-  'lotus',
-  'lotus',
-  'moon',
-  'moon',
-]
-
-const getSlotJackpotValues = (betAmount: number) => ({
-  mini: Math.max(20, betAmount * 10),
-  minor: Math.max(100, betAmount * 30),
-  major: Math.max(500, betAmount * 120),
-  grand: Math.max(5000, betAmount * 1000),
-})
-
-const createInitialSlotsGrid = (): SlotCell[][] =>
-  Array.from({ length: SLOT_ROWS }, (_, rowIndex) =>
-    Array.from({ length: SLOT_COLUMNS }, (_, columnIndex) => ({
-      kind: 'symbol' as const,
-      symbol: SLOT_SYMBOL_POOL[(rowIndex + columnIndex) % SLOT_SYMBOL_POOL.length],
-    })),
-  )
-
-const getRandomSlotSymbol = () => SLOT_SYMBOL_POOL[Math.floor(Math.random() * SLOT_SYMBOL_POOL.length)]
-
-const getRandomSlotOrb = (betAmount: number): SlotCell => {
-  const jackpotRoll = Math.random()
-
-  if (jackpotRoll < 0.03) {
-    return { kind: 'orb', value: 0, jackpot: 'mini' }
-  }
-
-  if (jackpotRoll < 0.045) {
-    return { kind: 'orb', value: 0, jackpot: 'minor' }
-  }
-
-  if (jackpotRoll < 0.052) {
-    return { kind: 'orb', value: 0, jackpot: 'major' }
-  }
-
-  const orbMultipliers = [1, 2, 2, 3, 4, 5, 8, 10, 15]
-  const multiplier = orbMultipliers[Math.floor(Math.random() * orbMultipliers.length)]
-
-  return {
-    kind: 'orb',
-    value: betAmount * multiplier,
-    jackpot: null,
-  }
-}
-
-const createSlotsSpinGrid = (betAmount: number): SlotCell[][] =>
-  Array.from({ length: SLOT_ROWS }, () =>
-    Array.from({ length: SLOT_COLUMNS }, () =>
-      Math.random() < 0.24 ? getRandomSlotOrb(betAmount) : { kind: 'symbol' as const, symbol: getRandomSlotSymbol() },
-    ),
-  )
-
-const createSlotsSpinTopRow = (betAmount: number): SlotCell[] =>
-  Array.from({ length: SLOT_COLUMNS }, () =>
-    Math.random() < 0.24 ? getRandomSlotOrb(betAmount) : { kind: 'symbol' as const, symbol: getRandomSlotSymbol() },
-  )
-
 // Reel choreography: the final grid is decided before the animation starts,
 // so what the reels settle on is always exactly what pays out.
 const SLOTS_REEL_STOP_DELAYS_MS = [1050, 1600, 2150, 2700, 3450]
 const SLOTS_REEL_SETTLE_MS = 640
 const SLOTS_REEL_LOOP_CELLS = 6
 
-const createSlotsFinalGrid = (betAmount: number): SlotCell[][] =>
-  Array.from({ length: SLOT_ROWS }, () => createSlotsSpinTopRow(betAmount))
-
 const createSlotsReelFiller = (): SlotCell[] =>
   Array.from({ length: SLOTS_REEL_LOOP_CELLS }, () => ({
     kind: 'symbol' as const,
     symbol: getRandomSlotSymbol(),
   }))
-
-const getSlotsWinningCells = (grid: SlotCell[][]): boolean[][] => {
-  const winning = Array.from({ length: SLOT_ROWS }, () =>
-    Array.from({ length: SLOT_COLUMNS }, () => false),
-  )
-
-  for (let rowIndex = 0; rowIndex < SLOT_ROWS; rowIndex += 1) {
-    const firstCell = grid[rowIndex][0]
-
-    if (firstCell.kind !== 'symbol') {
-      continue
-    }
-
-    let matchCount = 1
-
-    for (let columnIndex = 1; columnIndex < SLOT_COLUMNS; columnIndex += 1) {
-      const cell = grid[rowIndex][columnIndex]
-
-      if (cell.kind === 'symbol' && cell.symbol === firstCell.symbol) {
-        matchCount += 1
-      } else {
-        break
-      }
-    }
-
-    if (matchCount >= 3) {
-      for (let columnIndex = 0; columnIndex < matchCount; columnIndex += 1) {
-        winning[rowIndex][columnIndex] = true
-      }
-    }
-  }
-
-  return winning
-}
-
-const countSlotsBonusSymbols = (grid: SlotCell[][]) =>
-  grid.flat().filter((cell) => cell.kind === 'orb').length
-
-const calculateSlotsLinePayout = (grid: SlotCell[][], betAmount: number) => {
-  const winningLines: string[] = []
-  let totalPayout = 0
-
-  for (let rowIndex = 0; rowIndex < SLOT_ROWS; rowIndex += 1) {
-    const firstCell = grid[rowIndex][0]
-
-    if (firstCell.kind !== 'symbol') {
-      continue
-    }
-
-    let matchCount = 1
-
-    for (let columnIndex = 1; columnIndex < SLOT_COLUMNS; columnIndex += 1) {
-      const currentCell = grid[rowIndex][columnIndex]
-
-      if (currentCell.kind === 'symbol' && currentCell.symbol === firstCell.symbol) {
-        matchCount += 1
-      } else {
-        break
-      }
-    }
-
-    if (matchCount >= 3) {
-      const payoutMultiplier = SLOT_PAYTABLE[firstCell.symbol][matchCount as 3 | 4 | 5]
-      const linePayout = betAmount * payoutMultiplier
-      totalPayout += linePayout
-      winningLines.push(`${SLOT_SYMBOL_LABELS[firstCell.symbol]} x${matchCount} pays $${linePayout}`)
-    }
-  }
-
-  return { totalPayout, winningLines }
-}
-
-const createSlotsBonusGridFromSpin = (grid: SlotCell[][]): (SlotCell | null)[][] =>
-  grid.map((row) => row.map((cell) => (cell.kind === 'orb' ? cell : null)))
-
-const respinSlotsBonusGrid = (
-  currentGrid: (SlotCell | null)[][],
-  betAmount: number,
-): { nextGrid: (SlotCell | null)[][]; newOrbCount: number } => {
-  const nextGrid = currentGrid.map((row) => [...row])
-  const emptySpots: Array<{ rowIndex: number; columnIndex: number }> = []
-
-  for (let rowIndex = 0; rowIndex < SLOT_ROWS; rowIndex += 1) {
-    for (let columnIndex = 0; columnIndex < SLOT_COLUMNS; columnIndex += 1) {
-      if (!nextGrid[rowIndex][columnIndex]) {
-        emptySpots.push({ rowIndex, columnIndex })
-      }
-    }
-  }
-
-  let newOrbCount = 0
-
-  emptySpots.forEach(({ rowIndex, columnIndex }) => {
-    if (Math.random() < 0.16) {
-      nextGrid[rowIndex][columnIndex] = getRandomSlotOrb(betAmount)
-      newOrbCount += 1
-    }
-  })
-
-  if (newOrbCount === 0 && emptySpots.length > 0 && Math.random() < 0.35) {
-    const guaranteedSpot = emptySpots[Math.floor(Math.random() * emptySpots.length)]
-    nextGrid[guaranteedSpot.rowIndex][guaranteedSpot.columnIndex] = getRandomSlotOrb(betAmount)
-    newOrbCount = 1
-  }
-
-  return { nextGrid, newOrbCount }
-}
-
-const calculateSlotsBonusPayout = (
-  bonusGrid: (SlotCell | null)[][],
-  betAmount: number,
-) => {
-  const jackpots = getSlotJackpotValues(betAmount)
-  let totalPayout = 0
-  let miniCount = 0
-  let minorCount = 0
-  let majorCount = 0
-  let orbValueTotal = 0
-  let filledCount = 0
-
-  bonusGrid.flat().forEach((cell) => {
-    if (!cell || cell.kind !== 'orb') {
-      return
-    }
-
-    filledCount += 1
-    orbValueTotal += cell.value
-    totalPayout += cell.value
-
-    if (cell.jackpot === 'mini') {
-      miniCount += 1
-      totalPayout += jackpots.mini
-    }
-
-    if (cell.jackpot === 'minor') {
-      minorCount += 1
-      totalPayout += jackpots.minor
-    }
-
-    if (cell.jackpot === 'major') {
-      majorCount += 1
-      totalPayout += jackpots.major
-    }
-  })
-
-  const hitGrand = filledCount === SLOT_ROWS * SLOT_COLUMNS
-
-  if (hitGrand) {
-    totalPayout += jackpots.grand
-  }
-
-  return {
-    totalPayout,
-    orbValueTotal,
-    miniCount,
-    minorCount,
-    majorCount,
-    hitGrand,
-  }
-}
 
 const CasinoStatisticsChart = ({ stats }: { stats: CasinoDailyStat[] }) => {
   const [hoveredPoint, setHoveredPoint] = useState<{
@@ -1652,533 +1168,16 @@ const CasinoStatisticsChart = ({ stats }: { stats: CasinoDailyStat[] }) => {
   )
 }
 
-const getPlinkoCenterBiasForWinStreak = (winStreak: number) => {
-  if (winStreak < 2) {
-    return 0
-  }
-
-  if (winStreak === 2) {
-    return 0.1
-  }
-
-  if (winStreak === 3) {
-    return 0.16
-  }
-
-  return 0.22
-}
-
-const createPokerRoomCode = () =>
-  Array.from({ length: 4 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 32)]).join('')
-
-const getPokerRoomDocRef = (code: string) => {
-  if (!firestore) {
-    return null
-  }
-
-  return doc(firestore, 'pokerRooms', code)
-}
-
-const readPokerRoom = async (code: string) => {
-  const roomRef = getPokerRoomDocRef(code)
-
-  if (!roomRef) {
-    return null
-  }
-
-  const roomSnapshot = await getDoc(roomRef)
-  return roomSnapshot.exists() ? (roomSnapshot.data() as PokerRoomState) : null
-}
-
-const writePokerRoom = async (room: PokerRoomState) => {
-  const roomRef = getPokerRoomDocRef(room.code)
-
-  if (!roomRef) {
-    return
-  }
-
-  // the rules only accept poker writes from a signed-in (silent) session
-  await ensurePlayerSession()
-  await setDoc(roomRef, room)
-}
-
-const getPokerRoomMessage = (playerCount: number) =>
-  playerCount >= 2
-    ? 'Enough players are seated to start.'
-    : `Waiting for ${2 - playerCount} more player${2 - playerCount === 1 ? '' : 's'} to join before the game can start.`
-
-const getPokerRankValue = (rank: string) => {
-  if (rank === 'A') {
-    return 14
-  }
-
-  if (rank === 'K') {
-    return 13
-  }
-
-  if (rank === 'Q') {
-    return 12
-  }
-
-  if (rank === 'J') {
-    return 11
-  }
-
-  return Number(rank)
-}
-
-const comparePokerScores = (left: number[], right: number[]) => {
-  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
-    const difference = (left[index] ?? 0) - (right[index] ?? 0)
-
-    if (difference !== 0) {
-      return difference
-    }
-  }
-
-  return 0
-}
-
-const getStraightHighCard = (values: number[]) => {
-  const uniqueValues = Array.from(new Set(values)).sort((left, right) => right - left)
-
-  if (uniqueValues.includes(14)) {
-    uniqueValues.push(1)
-  }
-
-  for (let index = 0; index <= uniqueValues.length - 5; index += 1) {
-    const window = uniqueValues.slice(index, index + 5)
-
-    if (window[0] - window[4] === 4) {
-      return window[0] === 1 ? 5 : window[0]
-    }
-  }
-
-  return 0
-}
-
-const evaluateFiveCardPokerHand = (cards: Card[]) => {
-  const values = cards.map((card) => getPokerRankValue(card.rank)).sort((left, right) => right - left)
-  const suitCounts = cards.reduce<Record<string, number>>((counts, card) => {
-    counts[card.suit] = (counts[card.suit] ?? 0) + 1
-    return counts
-  }, {})
-  const isFlush = Object.values(suitCounts).some((count) => count === 5)
-  const straightHigh = getStraightHighCard(values)
-  const counts = values.reduce<Record<number, number>>((result, value) => {
-    result[value] = (result[value] ?? 0) + 1
-    return result
-  }, {})
-  const groupedValues = Object.entries(counts)
-    .map(([value, count]) => ({ value: Number(value), count }))
-    .sort((left, right) => {
-      if (right.count !== left.count) {
-        return right.count - left.count
-      }
-
-      return right.value - left.value
-    })
-
-  if (isFlush && straightHigh > 0) {
-    return [8, straightHigh]
-  }
-
-  if (groupedValues[0]?.count === 4) {
-    return [7, groupedValues[0].value, groupedValues[1].value]
-  }
-
-  if (groupedValues[0]?.count === 3 && groupedValues[1]?.count === 2) {
-    return [6, groupedValues[0].value, groupedValues[1].value]
-  }
-
-  if (isFlush) {
-    return [5, ...values]
-  }
-
-  if (straightHigh > 0) {
-    return [4, straightHigh]
-  }
-
-  if (groupedValues[0]?.count === 3) {
-    return [3, groupedValues[0].value, ...groupedValues.slice(1).map((entry) => entry.value)]
-  }
-
-  if (groupedValues[0]?.count === 2 && groupedValues[1]?.count === 2) {
-    const highPair = Math.max(groupedValues[0].value, groupedValues[1].value)
-    const lowPair = Math.min(groupedValues[0].value, groupedValues[1].value)
-    return [2, highPair, lowPair, groupedValues[2].value]
-  }
-
-  if (groupedValues[0]?.count === 2) {
-    return [1, groupedValues[0].value, ...groupedValues.slice(1).map((entry) => entry.value)]
-  }
-
-  return [0, ...values]
-}
-
-const evaluateBestPokerHand = (cards: Card[]) => {
-  let bestScore: number[] = [-1]
-
-  for (let first = 0; first < cards.length - 4; first += 1) {
-    for (let second = first + 1; second < cards.length - 3; second += 1) {
-      for (let third = second + 1; third < cards.length - 2; third += 1) {
-        for (let fourth = third + 1; fourth < cards.length - 1; fourth += 1) {
-          for (let fifth = fourth + 1; fifth < cards.length; fifth += 1) {
-            const nextScore = evaluateFiveCardPokerHand([
-              cards[first],
-              cards[second],
-              cards[third],
-              cards[fourth],
-              cards[fifth],
-            ])
-
-            if (comparePokerScores(nextScore, bestScore) > 0) {
-              bestScore = nextScore
-            }
-          }
-        }
-      }
-    }
-  }
-
-  return bestScore
-}
-
-const getOccupiedPokerSeatIndexes = (seats: (PokerSeat | null)[]) =>
-  seats.reduce<number[]>((indexes, seat, index) => {
-    if (seat) {
-      indexes.push(index)
-    }
-
-    return indexes
-  }, [])
-
-const getNextPokerSeatIndex = (
-  seats: (PokerSeat | null)[],
-  startIndex: number,
-  predicate: (seat: PokerSeat | null, index: number) => boolean,
-) => {
-  for (let step = 1; step <= seats.length; step += 1) {
-    const nextIndex = (startIndex + step) % seats.length
-
-    if (predicate(seats[nextIndex], nextIndex)) {
-      return nextIndex
-    }
-  }
-
-  return -1
-}
-
-const getPokerBlindSeatIndexes = (
-  seats: (PokerSeat | null)[],
-  dealerSeatIndex: number,
-  players: Record<string, PokerPlayerState>,
-) => {
-  const occupiedIndexes = getOccupiedPokerSeatIndexes(seats)
-
-  if (dealerSeatIndex < 0 || occupiedIndexes.length === 0) {
-    return {
-      smallBlindSeatIndex: -1,
-      bigBlindSeatIndex: -1,
-    }
-  }
-
-  if (occupiedIndexes.length === 2) {
-    return {
-      smallBlindSeatIndex: dealerSeatIndex,
-      bigBlindSeatIndex: getNextPokerSeatIndex(seats, dealerSeatIndex, (seat) =>
-        Boolean(seat && players[seat.id]),
-      ),
-    }
-  }
-
-  const smallBlindSeatIndex = getNextPokerSeatIndex(seats, dealerSeatIndex, (seat) =>
-    Boolean(seat && players[seat.id]),
-  )
-  const bigBlindSeatIndex =
-    occupiedIndexes.length > 2
-      ? getNextPokerSeatIndex(seats, smallBlindSeatIndex, (seat) => Boolean(seat && players[seat.id]))
-      : smallBlindSeatIndex
-
-  return {
-    smallBlindSeatIndex,
-    bigBlindSeatIndex,
-  }
-}
-
-const getPokerAmountToCall = ({
-  seats,
-  dealerSeatIndex,
-  players,
-  currentBet,
-  street,
-  smallBlind,
-  seatIndex,
-  seatId,
-}: {
-  seats: (PokerSeat | null)[]
-  dealerSeatIndex: number
-  players: Record<string, PokerPlayerState>
-  currentBet: number
-  street: PokerStreet
-  smallBlind: number
-  seatIndex: number
-  seatId: string
-}) => {
-  const playerState = players[seatId]
-
-  if (!playerState) {
-    return 0
-  }
-
-  const occupiedIndexes = getOccupiedPokerSeatIndexes(seats)
-  const standardAmountToCall = Math.max(0, currentBet - playerState.committed)
-
-  if (occupiedIndexes.length !== 2 || street !== 'preflop') {
-    return standardAmountToCall
-  }
-
-  const { smallBlindSeatIndex } = getPokerBlindSeatIndexes(seats, dealerSeatIndex, players)
-
-  if (seatIndex !== smallBlindSeatIndex) {
-    return standardAmountToCall
-  }
-
-  const expectedSmallBlindCommit = Math.min(smallBlind, playerState.committed + playerState.chips)
-  const effectiveCommitted = Math.max(playerState.committed, expectedSmallBlindCommit)
-
-  return Math.max(0, currentBet - effectiveCommitted)
-}
-
-const getPokerChipTokens = (amount: number) => {
-  let remaining = Math.max(0, Math.round(amount))
-  const chips: { color: string; label: string }[] = []
-
-  for (const denomination of POKER_CHIP_DENOMINATIONS) {
-    while (remaining >= denomination.value && chips.length < 8) {
-      chips.push({ color: denomination.color, label: String(denomination.value) })
-      remaining -= denomination.value
-    }
-  }
-
-  if (chips.length === 0 && amount > 0) {
-    chips.push({ color: 'white', label: String(amount) })
-  }
-
-  return chips
-}
-
-const startPokerHand = (room: PokerRoomState) => {
-  const occupiedIndexes = getOccupiedPokerSeatIndexes(room.seats)
-  const nextDealerSeatIndex =
-    room.dealerSeatIndex >= 0
-      ? getNextPokerSeatIndex(room.seats, room.dealerSeatIndex, (seat) => Boolean(seat))
-      : occupiedIndexes[0] ?? -1
-  const freshDeck = createShuffledDeck()
-  const players: Record<string, PokerPlayerState> = {}
-  let workingDeck = [...freshDeck]
-
-  occupiedIndexes.forEach((seatIndex) => {
-    const seat = room.seats[seatIndex]
-
-    if (!seat) {
-      return
-    }
-
-    const { drawnCards, remainingDeck } = drawCards(workingDeck, 2)
-    workingDeck = remainingDeck
-    players[seat.id] = {
-      chips: room.playerChips[seat.id] ?? 0,
-      holeCards: drawnCards,
-      folded: false,
-      allIn: false,
-      committed: 0,
-      acted: false,
-    }
-  })
-
-  const { smallBlindSeatIndex, bigBlindSeatIndex } = getPokerBlindSeatIndexes(
-    room.seats,
-    nextDealerSeatIndex,
-    players,
-  )
-
-  let pot = 0
-  let currentBet = 0
-
-  if (smallBlindSeatIndex !== -1) {
-    const smallBlindSeat = room.seats[smallBlindSeatIndex]
-
-    if (smallBlindSeat) {
-      const postedSmallBlind = Math.min(room.smallBlind, players[smallBlindSeat.id].chips)
-      players[smallBlindSeat.id] = {
-        ...players[smallBlindSeat.id],
-        chips: players[smallBlindSeat.id].chips - postedSmallBlind,
-        committed: postedSmallBlind,
-        allIn: players[smallBlindSeat.id].chips === postedSmallBlind,
-      }
-      pot += postedSmallBlind
-      currentBet = postedSmallBlind
-    }
-  }
-
-  if (bigBlindSeatIndex !== -1) {
-    const bigBlindSeat = room.seats[bigBlindSeatIndex]
-
-    if (bigBlindSeat) {
-      const postedBigBlind = Math.min(room.bigBlind, players[bigBlindSeat.id].chips)
-      players[bigBlindSeat.id] = {
-        ...players[bigBlindSeat.id],
-        chips: players[bigBlindSeat.id].chips - postedBigBlind,
-        committed: postedBigBlind,
-        allIn: players[bigBlindSeat.id].chips === postedBigBlind,
-      }
-      pot += postedBigBlind
-      currentBet = Math.max(currentBet, postedBigBlind)
-    }
-  }
-
-  const activeSeatIndex = getNextPokerSeatIndex(
-    room.seats,
-    bigBlindSeatIndex === -1 ? nextDealerSeatIndex : bigBlindSeatIndex,
-    (seat) => Boolean(seat && players[seat.id] && players[seat.id].chips > 0),
-  )
-
-  return {
-    ...room,
-    playerChips: Object.fromEntries(
-      room.seats
-        .filter(Boolean)
-        .map((seat) => [seat!.id, players[seat!.id]?.chips ?? room.playerChips[seat!.id] ?? 0]),
-    ),
-    dealerSeatIndex: nextDealerSeatIndex,
-    game: {
-      street: 'preflop' as PokerStreet,
-      activeSeatIndex,
-      currentBet,
-      pot,
-      communityCards: [],
-      deck: workingDeck,
-      players,
-      actionId: (room.game?.actionId ?? 0) + 1,
-      lastActorId: null,
-      lastActionType: 'blind' as PokerActionType,
-      lastContributions: [
-        ...(smallBlindSeatIndex !== -1 && room.seats[smallBlindSeatIndex]
-          ? [{ playerId: room.seats[smallBlindSeatIndex]!.id, amount: Math.min(room.smallBlind, room.playerChips[room.seats[smallBlindSeatIndex]!.id] ?? 0) }]
-          : []),
-        ...(bigBlindSeatIndex !== -1 && room.seats[bigBlindSeatIndex]
-          ? [{ playerId: room.seats[bigBlindSeatIndex]!.id, amount: Math.min(room.bigBlind, room.playerChips[room.seats[bigBlindSeatIndex]!.id] ?? 0) }]
-          : []),
-      ].filter((entry) => entry.amount > 0),
-      lastAction: `Blinds posted: small blind $${room.smallBlind}, big blind $${room.bigBlind}.`,
-      winnerMessage: null,
-    },
-  }
-}
-
-const createMinesBoard = (mineCount: number) => {
-  const mineIds = new Set<number>()
-
-  while (mineIds.size < mineCount) {
-    mineIds.add(Math.floor(Math.random() * MINES_TILE_COUNT))
-  }
-
-  return Array.from({ length: MINES_TILE_COUNT }, (_, index) => ({
+const getPokerRoomDocRef = (code: string) => (firestore ? doc(firestore, 'pokerRooms', code) : null)
+
+// The server keeps the mines; the page starts from a blank field. A developer
+// gets the mine positions so the field can show them.
+const createMinesBoard = (mineIds: number[] = []): MinesTile[] =>
+  Array.from({ length: MINES_TILE_COUNT }, (_, index) => ({
     id: index,
-    isMine: mineIds.has(index),
+    isMine: mineIds.includes(index),
     revealed: false,
   }))
-}
-
-const getMinesMultiplier = (safePickCount: number, mineCount: number) => {
-  const clampedMineCount = Math.min(Math.max(Math.floor(mineCount), MINES_MIN_COUNT), MINES_MAX_COUNT)
-  const maxSafePicks = MINES_TILE_COUNT - clampedMineCount
-  const clampedSafePickCount = Math.min(Math.max(Math.floor(safePickCount), 0), maxSafePicks)
-
-  if (clampedSafePickCount === 0) {
-    return 1
-  }
-
-  // Standard provably-fair Mines payout (Stake/Rainbet): the fair multiplier is
-  // the inverse of the odds of having cleared this many safe tiles, scaled by a
-  // 1% house edge. multiplier = (1 - edge) * ∏ (tilesLeft / safeTilesLeft).
-  let multiplier = MINES_EDGE
-
-  for (let index = 0; index < clampedSafePickCount; index += 1) {
-    const remainingTiles = MINES_TILE_COUNT - index
-    const remainingSafeTiles = remainingTiles - clampedMineCount
-    multiplier *= remainingTiles / remainingSafeTiles
-  }
-
-  return Number(multiplier.toFixed(2))
-}
-
-const DICE_SUM_DISTRIBUTION = (() => {
-  let counts = Array.from({ length: DICE_MAX_TOTAL + 1 }, () => 0)
-  counts[0] = 1
-
-  for (let dieIndex = 0; dieIndex < DICE_COUNT; dieIndex += 1) {
-    const nextCounts = Array.from({ length: DICE_MAX_TOTAL + 1 }, () => 0)
-
-    counts.forEach((count, total) => {
-      if (!count) {
-        return
-      }
-
-      for (let pip = 1; pip <= 6; pip += 1) {
-        nextCounts[total + pip] += count
-      }
-    })
-
-    counts = nextCounts
-  }
-
-  return counts
-})()
-
-const DICE_TOTAL_OUTCOMES = 6 ** DICE_COUNT
-// Standard "dice" payout, same as Stake/Rainbet: fair odds minus a 1% house
-// edge (99% RTP). multiplier = (1 - houseEdge) / winChance, so a ~50% bet pays
-// ~2x and the edge is constant across the whole target range.
-const DICE_HOUSE_EDGE = 0.01
-const DICE_MIN_MULTIPLIER = 1.01
-
-const clampDiceTarget = (value: number) =>
-  Math.min(DICE_MAX_TOTAL, Math.max(DICE_MIN_TOTAL, Math.round(value)))
-
-const rollTwentyDice = () => Array.from({ length: DICE_COUNT }, () => Math.floor(Math.random() * 6) + 1)
-
-const getDiceTotal = (values: number[]) => values.reduce((sum, value) => sum + value, 0)
-
-const getDiceWinChance = (target: number, mode: DiceMode) => {
-  const clampedTarget = clampDiceTarget(target)
-  let favorableOutcomes = 0
-
-  if (mode === 'lower') {
-    for (let total = DICE_MIN_TOTAL; total < clampedTarget; total += 1) {
-      favorableOutcomes += DICE_SUM_DISTRIBUTION[total] ?? 0
-    }
-  } else {
-    for (let total = clampedTarget + 1; total <= DICE_MAX_TOTAL; total += 1) {
-      favorableOutcomes += DICE_SUM_DISTRIBUTION[total] ?? 0
-    }
-  }
-
-  return favorableOutcomes / DICE_TOTAL_OUTCOMES
-}
-
-const getDiceMultiplier = (target: number, mode: DiceMode) => {
-  const winChance = getDiceWinChance(target, mode)
-
-  if (winChance <= 0) {
-    return 0
-  }
-
-  const fairMultiplier = (1 - DICE_HOUSE_EDGE) / winChance
-  const clamped = Math.min(DICE_MAX_MULTIPLIER, Math.max(DICE_MIN_MULTIPLIER, fairMultiplier))
-  return Number(clamped.toFixed(2))
-}
 
 const getDiceWinChanceLabel = (winChance: number) => {
   const percent = winChance * 100
@@ -2207,39 +1206,6 @@ const getDiceWinChanceLabel = (winChance: number) => {
   return `${percent.toFixed(2)}%`
 }
 
-const getDailyRewardAmountForDay = (streakDay: number) => {
-  const normalizedDay = Math.max(1, Math.floor(streakDay))
-  const weekIndex = Math.floor((normalizedDay - 1) / 7)
-  const dayIndex = (normalizedDay - 1) % 7
-
-  if (weekIndex === 0) {
-    return DAILY_REWARD_WEEK_ONE[dayIndex]
-  }
-
-  const weekStart = 125 + (weekIndex - 1) * 55
-  const weekSchedule = [
-    weekStart,
-    weekStart + 20,
-    weekStart + 45,
-    weekStart + 75,
-    weekStart + 110,
-    weekStart + 150,
-    weekStart + 325,
-  ]
-
-  return weekSchedule[dayIndex]
-}
-
-const getDateKeyDistance = (leftKey: string, rightKey: string) => {
-  const [leftYear, leftMonth, leftDay] = leftKey.split('-').map(Number)
-  const [rightYear, rightMonth, rightDay] = rightKey.split('-').map(Number)
-  const leftDate = new Date(leftYear, leftMonth - 1, leftDay)
-  const rightDate = new Date(rightYear, rightMonth - 1, rightDay)
-  const millisecondsPerDay = 24 * 60 * 60 * 1000
-
-  return Math.round((leftDate.getTime() - rightDate.getTime()) / millisecondsPerDay)
-}
-
 const DICE_PIPS_BY_VALUE: Record<number, number[]> = {
   1: [5],
   2: [1, 9],
@@ -2248,8 +1214,6 @@ const DICE_PIPS_BY_VALUE: Record<number, number[]> = {
   5: [1, 3, 5, 7, 9],
   6: [1, 3, 4, 6, 7, 9],
 }
-
-const DAILY_REWARD_WEEK_ONE = [10, 20, 35, 55, 80, 100, 250]
 
 const renderDiceFace = (value: number, key: string) => {
   const activePips = DICE_PIPS_BY_VALUE[value] ?? []
@@ -2274,67 +1238,6 @@ const renderAnimatedDiceFace = (value: number, key: string, rolling: boolean, fr
     {renderDiceFace(value, `${key}-${frame}`)}
   </div>
 )
-
-const finishDealerHand = (startingHand: Card[], currentDeck: Card[]) => {
-  let dealerCards = [...startingHand]
-  let deckAfterDraw = [...currentDeck]
-
-  while (getHandValue(dealerCards) < 17) {
-    const { drawnCards, remainingDeck } = drawCards(deckAfterDraw, 1)
-    dealerCards = [...dealerCards, drawnCards[0]]
-    deckAfterDraw = remainingDeck
-  }
-
-  return { finalDealerHand: dealerCards, remainingDeck: deckAfterDraw }
-}
-
-const getRoundResult = (
-  playerHands: Card[][],
-  dealer: Card[],
-  handBets: number[],
-): RoundResult => {
-  const dealerTotal = getHandValue(dealer)
-  const summaries: string[] = []
-  let payout = 0
-
-  playerHands.forEach((hand, index) => {
-    const playerTotal = getHandValue(hand)
-    const wager = handBets[index]
-    const label = playerHands.length > 1 ? `Hand ${index + 1}` : 'You'
-    // "You lose" but "Hand 1 loses" — the verb agrees with the subject
-    const s = label === 'You' ? '' : 's'
-
-    if (playerTotal > 21) {
-      summaries.push(`${label} bust${s} with ${playerTotal}.`)
-      return
-    }
-
-    if (dealerTotal > 21) {
-      summaries.push(`${label} win${s}. Dealer busts with ${dealerTotal}.`)
-      payout += wager * 2
-      return
-    }
-
-    if (playerTotal > dealerTotal) {
-      summaries.push(`${label} win${s} ${playerTotal} to ${dealerTotal}.`)
-      payout += wager * 2
-      return
-    }
-
-    if (playerTotal < dealerTotal) {
-      summaries.push(`${label} lose${s} ${playerTotal} to ${dealerTotal}.`)
-      return
-    }
-
-    summaries.push(`${label} tie${s} at ${playerTotal}.`)
-    payout += wager
-  })
-
-  const totalWager = handBets.reduce((sum, wager) => sum + wager, 0)
-  const delta = payout - totalWager
-
-  return { message: summaries.join(' '), delta, payout }
-}
 
 // Google's four-colour "G", drawn inline for the sign-in buttons
 function GoogleMark() {
@@ -2397,7 +1300,6 @@ function App() {
   const [completedHands, setCompletedHands] = useState<boolean[]>([])
   const [activeHandIndex, setActiveHandIndex] = useState(0)
   const [dealerHand, setDealerHand] = useState<Card[]>([])
-  const [deck, setDeck] = useState<Card[]>([])
   const [dealerRevealed, setDealerRevealed] = useState(false)
   const [roundResult, setRoundResult] = useState<RoundResult | null>(null)
   const [betInput, setBetInput] = useState(String(MIN_BET))
@@ -2410,7 +1312,15 @@ function App() {
   const rouletteWheelRef = useRef<HTMLDivElement | null>(null)
   const rouletteBallRef = useRef<HTMLDivElement | null>(null)
   const rouletteSpinPoseRef = useRef<RouletteSpinPose>({ wheel: 0, ball: 0, radius: ROULETTE_TRACK_RADIUS })
-  const [hiLoDeck, setHiLoDeck] = useState<Card[]>([])
+  const [hiLoServerOdds, setHiLoServerOdds] = useState<HiLoOdds>({
+    higherCount: 0,
+    lowerCount: 0,
+    equalCount: 0,
+    higherProbability: 0,
+    lowerProbability: 0,
+    higherStepMultiplier: 1,
+    lowerStepMultiplier: 1,
+  })
   const [hiLoCurrentCard, setHiLoCurrentCard] = useState<Card | null>(null)
   const [hiLoUpcomingCard, setHiLoUpcomingCard] = useState<Card | null>(null)
   const [hiLoNextCard, setHiLoNextCard] = useState<Card | null>(null)
@@ -2469,7 +1379,8 @@ function App() {
   const [jetstreamResult, setJetstreamResult] = useState<JetstreamRound | null>(null)
   const [jetstreamHistory, setJetstreamHistory] = useState<JetstreamRound[]>([])
   // the flight in the air and its stake; settled exactly once
-  const jetstreamPendingRef = useRef<{ flight: JetFlight; bet: number } | null>(null)
+  const jetstreamPendingRef = useRef<{ flight: JetFlight; bet: number; payout: number; balance: number } | null>(null)
+  const jetstreamRequestPendingRef = useRef(false)
   const [slotsGrid, setSlotsGrid] = useState<SlotCell[][]>(() => createInitialSlotsGrid())
   const [slotsBonusGrid, setSlotsBonusGrid] = useState<(SlotCell | null)[][]>(() =>
     createSlotsBonusGridFromSpin(createInitialSlotsGrid()),
@@ -2498,21 +1409,7 @@ function App() {
   const [diceMessage, setDiceMessage] = useState('Pick a side, move the target, then roll all 20 dice.')
   const [diceRolling, setDiceRolling] = useState(false)
   const [diceRollFrame, setDiceRollFrame] = useState(0)
-  const [pokerPlayerId] = useState(() => {
-    if (typeof window === 'undefined') {
-      return `player-${Math.random().toString(36).slice(2, 10)}`
-    }
-
-    const existingPlayerId = window.sessionStorage.getItem(POKER_PLAYER_SESSION_KEY)
-
-    if (existingPlayerId) {
-      return existingPlayerId
-    }
-
-    const nextPlayerId = `player-${Math.random().toString(36).slice(2, 10)}`
-    window.sessionStorage.setItem(POKER_PLAYER_SESSION_KEY, nextPlayerId)
-    return nextPlayerId
-  })
+  const pokerPlayerId = playerProfile.id
   const [pokerMode, setPokerMode] = useState<'choose' | 'join' | 'create'>('choose')
   const [pokerScreen, setPokerScreen] = useState<'entry' | 'table'>('entry')
   const [pokerName, setPokerName] = useState('')
@@ -2592,6 +1489,16 @@ function App() {
   const slotsSpinTokenRef = useRef(0)
   const slotsColumnStopTimeoutsRef = useRef<number[]>([])
   const pendingPlinkoDropsRef = useRef<PendingPlinkoDrop[]>([])
+  const plinkoLatestBalanceRef = useRef<number | null>(null)
+  // one request at a time per game, so a double-click can't send two bets
+  const dailyClaimPendingRef = useRef(false)
+  const slotsRequestPendingRef = useRef(false)
+  const hiLoRequestPendingRef = useRef(false)
+  const minesRequestPendingRef = useRef(false)
+  const blackjackRequestPendingRef = useRef(false)
+  // poker: the public table plus the private cards this browser may see
+  const pokerPublicRoomRef = useRef<PokerRoomState | null>(null)
+  const pokerHandsRef = useRef<Record<string, { handId: number; cards: Card[] }>>({})
   const settledPlinkoIdsRef = useRef<Set<string>>(new Set())
   const autoCashoutSnapshotRef = useRef({
     playerProfileId: playerProfile.id,
@@ -2618,13 +1525,27 @@ function App() {
           updatedAt: new Date().toISOString(),
         }
 
+        // the server owns the real balance; this is only the page's copy
         writeLocalPlayerProfile(nextProfile)
-        void syncRemotePlayerProfile(nextProfile)
         return nextProfile
       })
 
       return nextBankroll
     })
+  }
+
+  // Every bet goes to the game server, which decides it and returns the new
+  // balance. These two helpers are how the games talk to it.
+  const callCasino = <T,>(route: string, body: Record<string, unknown> = {}) =>
+    casinoCall<T>(route, { playerId: playerProfile.id, ...body })
+
+  const reportCasinoError = (error: unknown) => {
+    const message = error instanceof Error ? error.message : 'Could not reach the casino. Try again.'
+    if (error instanceof CasinoError && typeof error.balance === 'number') {
+      setBankroll(error.balance)
+    }
+    setBetInputError(message)
+    return message
   }
 
   const syncSettingsPlayers = () => {
@@ -2634,12 +1555,20 @@ function App() {
   // Your own record is stamped with this browser's silent-session uid; the
   // Firestore rules only let that uid change it. Someone else's record can only
   // be changed by the developer session, and keeps its owner untouched.
+  // Money and the daily-bonus streak are written only by the game server, so
+  // the page never sends them; everything else merges into the record.
   const syncRemotePlayerProfile = async (nextProfile: LocalPlayerProfile, asDeveloper = false) => {
+    const {
+      bankroll: _bankroll,
+      dailyRewardStreak: _dailyRewardStreak,
+      lastDailyRewardClaimDate: _lastDailyRewardClaimDate,
+      ownerUid: _ownerUid,
+      ...fields
+    } = nextProfile as LocalPlayerProfile & { ownerUid?: string }
     try {
       if (asDeveloper) {
         const developerRef = getDeveloperPlayerDocRef(nextProfile.id)
         if (developerRef) {
-          const { ownerUid: _ownerUid, ...fields } = nextProfile as LocalPlayerProfile & { ownerUid?: string }
           await setDoc(developerRef, fields, { merge: true })
         }
         return
@@ -2650,7 +1579,7 @@ function App() {
       if (!profileRef || !ownerUid) {
         return
       }
-      await setDoc(profileRef, { ...nextProfile, ownerUid })
+      await setDoc(profileRef, { ...fields, ownerUid }, { merge: true })
     } catch (error) {
       console.error('Failed to sync player profile', error)
     }
@@ -2907,9 +1836,13 @@ function App() {
         const currentRemoteProfile = allPlayers.find((profile) => profile.id === playerProfile.id)
 
         if (currentRemoteProfile) {
-          writeLocalPlayerProfile(currentRemoteProfile)
-          setPlayerProfile(currentRemoteProfile)
-          setBankrollState(currentRemoteProfile.bankroll)
+          // the balance comes straight from the server's replies, so a round's
+          // result never shows up here before its animation finishes
+          setPlayerProfile((currentProfile) => {
+            const nextProfile = { ...currentRemoteProfile, bankroll: currentProfile.bankroll }
+            writeLocalPlayerProfile(nextProfile)
+            return nextProfile
+          })
         }
 
         return
@@ -2994,53 +1927,33 @@ function App() {
     setPlayerDailyStats(readPlayerDailyStats(playerProfile.id))
   }, [playerProfile.id])
 
+  // On load, ask the server for this player's real balance. Anything left
+  // open on a previous visit (a hi-lo streak, a mines board, a blackjack hand)
+  // is settled fairly there first.
   useEffect(() => {
-    const pendingCashout = readPendingCashout(playerProfile.id)
-
-    if (!pendingCashout || pendingCashout.amount <= 0) {
-      return
-    }
-
-    clearPendingCashout(playerProfile.id)
-    setBankroll((currentBankroll) => currentBankroll + pendingCashout.amount)
-  }, [playerProfile.id])
-
-  useEffect(() => {
-    const handleAutoCashoutOnClose = () => {
-      const snapshot = autoCashoutSnapshotRef.current
-      const autoCashoutAmount =
-        (snapshot.hiLoActive ? snapshot.hiLoCashOutAmount : 0) +
-        (snapshot.minesActive ? snapshot.minesCashOutAmount : 0)
-
-      if (autoCashoutAmount <= 0) {
-        return
-      }
-      
-      writePendingCashout({
-        playerId: snapshot.playerProfileId,
-        amount: autoCashoutAmount,
-        createdAt: new Date().toISOString(),
+    let cancelled = false
+    callCasino<{ dailyStreak: number; lastDailyClaim: string | null }>('player/me')
+      .then((session) => {
+        if (cancelled) {
+          return
+        }
+        setBankroll(session.balance)
+        setPlayerProfile((currentProfile) => {
+          const nextProfile = {
+            ...currentProfile,
+            bankroll: session.balance,
+            dailyRewardStreak: session.dailyStreak,
+            lastDailyRewardClaimDate: session.lastDailyClaim,
+          }
+          writeLocalPlayerProfile(nextProfile)
+          return nextProfile
+        })
       })
-    }
-
-    const handleBeforeUnload = () => {
-      handleAutoCashoutOnClose()
-    }
-
-    const handleUnload = () => {
-      handleAutoCashoutOnClose()
-    }
-
-    window.addEventListener('pagehide', handleAutoCashoutOnClose)
-    window.addEventListener('beforeunload', handleBeforeUnload)
-    window.addEventListener('unload', handleUnload)
-
+      .catch((error) => console.error('Could not load your casino session', error))
     return () => {
-      window.removeEventListener('pagehide', handleAutoCashoutOnClose)
-      window.removeEventListener('beforeunload', handleBeforeUnload)
-      window.removeEventListener('unload', handleUnload)
+      cancelled = true
     }
-  }, [])
+  }, [playerProfile.id])
 
   useEffect(() => {
     const handleStorageUpdate = (event: StorageEvent) => {
@@ -3166,20 +2079,27 @@ function App() {
   }
 
   const handleClaimDailyReward = () => {
-    if (!canClaimDailyReward) {
+    if (!canClaimDailyReward || dailyClaimPendingRef.current) {
       return
     }
 
-    const nextProfile = {
-      ...playerProfile,
-      bankroll: normalizeBankroll(bankroll + nextDailyRewardAmount),
-      dailyRewardStreak: nextDailyRewardDay,
-      lastDailyRewardClaimDate: todayDateKey,
-      updatedAt: new Date().toISOString(),
-    }
-
-    persistLocalPlayerProfile(nextProfile)
-    setBankroll(nextProfile.bankroll)
+    dailyClaimPendingRef.current = true
+    callCasino<{ amount: number; dailyStreak: number; lastDailyClaim: string }>('daily/claim', {
+      todayKey: todayDateKey,
+    })
+      .then((claim) => {
+        persistLocalPlayerProfile({
+          ...playerProfile,
+          bankroll: claim.balance,
+          dailyRewardStreak: claim.dailyStreak,
+          lastDailyRewardClaimDate: claim.lastDailyClaim,
+          updatedAt: new Date().toISOString(),
+        })
+      })
+      .catch(reportCasinoError)
+      .finally(() => {
+        dailyClaimPendingRef.current = false
+      })
   }
 
   const handleAdjustDevBankroll = (amount: number) => {
@@ -3187,7 +2107,19 @@ function App() {
       return
     }
 
-    setBankroll((currentBankroll) => Math.max(0, currentBankroll + amount))
+    callCasino('admin/adjust', { targetPlayerId: playerProfile.id, amount })
+      .then((response) => setBankroll(response.balance))
+      .catch(reportCasinoError)
+  }
+
+  const handleResetDevBankroll = () => {
+    if (!devMode) {
+      return
+    }
+
+    callCasino('admin/set-balance', { targetPlayerId: playerProfile.id, bankroll: BANKROLL })
+      .then((response) => setBankroll(response.balance))
+      .catch(reportCasinoError)
   }
 
   useEffect(() => {
@@ -3215,29 +2147,60 @@ function App() {
         return
       }
 
-      const activeRoom = roomSnapshot.data() as PokerRoomState
-      setPokerSeats(activeRoom.seats)
-      setPokerHostId(activeRoom.hostId)
-      setPokerDealerSeatIndex(activeRoom.dealerSeatIndex)
-      setPokerPlayerChips(activeRoom.playerChips)
-      setPokerGame(activeRoom.game)
-      setPokerPendingStart(activeRoom.pendingStart)
-      setPokerBuyIn(activeRoom.buyIn)
-      setPokerBuyInInput(String(activeRoom.buyIn))
-      setPokerSmallBlind(activeRoom.smallBlind)
-      setPokerSmallBlindInput(String(activeRoom.smallBlind))
-      setPokerBigBlind(activeRoom.bigBlind)
-      setPokerMessage(
-        activeRoom.pendingStart
-          ? `Waiting for players to confirm the ${formatPoints(activeRoom.pendingStart.buyIn)} entry.`
-          : activeRoom.game?.winnerMessage ?? activeRoom.game?.lastAction ?? getPokerRoomMessage(activeRoom.seats.filter(Boolean).length),
-      )
+      applyPokerRoom(roomSnapshot.data() as PokerRoomState)
     })
+
+    // this browser's own two cards (the table document never carries them)
+    const handRef = firestore ? doc(firestore, 'pokerRooms', pokerRoomCode, 'hands', pokerPlayerId) : null
+    const unsubscribeHand = handRef
+      ? onSnapshot(
+          handRef,
+          (handSnapshot) => {
+            const hand = handSnapshot.data() as { handId?: number; cards?: Card[] } | undefined
+            if (hand?.cards) {
+              pokerHandsRef.current = {
+                ...pokerHandsRef.current,
+                [pokerPlayerId]: { handId: hand.handId ?? 0, cards: hand.cards },
+              }
+              if (pokerPublicRoomRef.current) {
+                applyPokerRoom(pokerPublicRoomRef.current)
+              }
+            }
+          },
+          () => undefined,
+        )
+      : () => undefined
+
+    // a developer sees every hand
+    const unsubscribeAllHands =
+      devMode && developerFirestore
+        ? onSnapshot(
+            collection(developerFirestore, 'pokerRooms', pokerRoomCode, 'hands'),
+            (handsSnapshot) => {
+              handsSnapshot.docs.forEach((entry) => {
+                const hand = entry.data() as { handId?: number; cards?: Card[] }
+                if (hand.cards) {
+                  pokerHandsRef.current = {
+                    ...pokerHandsRef.current,
+                    [entry.id]: { handId: hand.handId ?? 0, cards: hand.cards },
+                  }
+                }
+              })
+              if (pokerPublicRoomRef.current) {
+                applyPokerRoom(pokerPublicRoomRef.current)
+              }
+            },
+            () => undefined,
+          )
+        : () => undefined
 
     return () => {
       unsubscribe()
+      unsubscribeHand()
+      unsubscribeAllHands()
     }
-  }, [pokerRoomCode])
+  }, [pokerRoomCode, devMode])
+
 
   useEffect(() => {
     if (!pokerGame) {
@@ -3844,7 +2807,6 @@ function App() {
     setRouletteWinningNumber(null)
     setRouletteResult(null)
     setRouletteIsSpinning(false)
-    setHiLoDeck([])
     setHiLoCurrentCard(null)
     setHiLoUpcomingCard(null)
     setHiLoNextCard(null)
@@ -3890,21 +2852,47 @@ function App() {
     setPokerActionError('')
   }
 
+  // Leaving a table with a round open: the server settles it (cashing out a
+  // hi-lo streak or mines board, standing on a blackjack hand, finishing a
+  // slots bonus) and reports what came back.
   const settleCashoutBeforeExit = () => {
-    if (selectedGame === 'hilo' && hiLoCurrentCard && !hiLoResult && hiLoStreak > 0) {
-      setBankroll((currentBankroll) => currentBankroll + hiLoCashOutAmount)
-      applyPlayerDailyDelta(hiLoCashOutAmount - bet)
-      applyCasinoDailyDelta(hiLoCashOutAmount - bet)
-      applyCasinoGameDailyDelta('hilo', hiLoCashOutAmount - bet)
+    const openGame =
+      selectedGame === 'hilo' && hiLoCurrentCard && !hiLoResult
+        ? 'hilo'
+        : selectedGame === 'mines' && minesRoundActive && !minesResult
+          ? 'mines'
+          : selectedGame === 'blackjack' && isHandActive
+            ? 'blackjack'
+            : selectedGame === 'chicken' && chickenStatus === 'playing'
+              ? 'chicken'
+              : selectedGame === 'slots' && slotsBonusActive
+                ? 'slots'
+                : null
+
+    if (!openGame) {
       return
     }
 
-    if (selectedGame === 'mines' && minesRoundActive && !minesResult && minesSafePicks > 0) {
-      setBankroll((currentBankroll) => currentBankroll + minesCashOutAmount)
-      applyPlayerDailyDelta(minesCashOutAmount - bet)
-      applyCasinoDailyDelta(minesCashOutAmount - bet)
-      applyCasinoGameDailyDelta('mines', minesCashOutAmount - bet)
-    }
+    const stake =
+      openGame === 'hilo' || openGame === 'mines'
+        ? bet
+        : openGame === 'blackjack'
+          ? totalWager
+          : openGame === 'chicken'
+            ? chickenBet
+            : slotsBonusBet - slotsBonusBasePayout
+
+    callCasino<{ settled: { game: CasinoTrackedGame; payout: number } | null }>('player/leave', { game: openGame })
+      .then((response) => {
+        setBankroll(response.balance)
+        if (response.settled) {
+          const net = roundMoney(response.settled.payout - stake)
+          applyPlayerDailyDelta(net)
+          applyCasinoDailyDelta(net)
+          applyCasinoGameDailyDelta(openGame, net)
+        }
+      })
+      .catch((error) => console.error('Could not settle the open round', error))
   }
 
   const applyTypedBet = () => {
@@ -4015,60 +3003,68 @@ function App() {
       return
     }
 
-    const nextDiceValues = rollTwentyDice()
-    const total = getDiceTotal(nextDiceValues)
-    const won = diceMode === 'lower' ? total < diceTarget : total > diceTarget
-    const payout = won ? dicePayout : 0
-    const delta = won ? payout - bet : -bet
-    const result: RoundResult = {
-      message: won
-        ? `${total} lands ${diceMode === 'lower' ? 'below' : 'above'} ${diceTarget}.`
-        : `${total} misses the ${diceMode} target of ${diceTarget}.`,
-      delta,
-      payout,
+    const startedAt = Date.now()
+    const stopRolling = () => {
+      if (diceRollIntervalRef.current) {
+        window.clearInterval(diceRollIntervalRef.current)
+        diceRollIntervalRef.current = null
+      }
     }
 
     setDiceRolling(true)
     setDiceResult(null)
     setDiceMessage('Rolling 20 dice across the table...')
+    setBetInputError('')
     setBankroll((currentBankroll) => currentBankroll - bet)
     setDiceValues(rollTwentyDice())
     setDiceRollFrame(0)
-
-    if (diceRollIntervalRef.current) {
-      window.clearInterval(diceRollIntervalRef.current)
-    }
-
+    stopRolling()
     diceRollIntervalRef.current = window.setInterval(() => {
       setDiceValues(rollTwentyDice())
       setDiceRollFrame((currentFrame) => currentFrame + 1)
     }, 130)
 
-    diceResolveTimeoutRef.current = window.setTimeout(() => {
-      if (diceRollIntervalRef.current) {
-        window.clearInterval(diceRollIntervalRef.current)
-        diceRollIntervalRef.current = null
-      }
-
-      setDiceValues(nextDiceValues)
-      setDiceResult(result)
-      setDiceMessage(
-        won
-          ? `20 dice total ${total}. You win $${delta}.`
-          : `20 dice total ${total}. The table keeps the bet.`,
-      )
-
-      if (result.payout > 0) {
-        setBankroll((currentBankroll) => currentBankroll + result.payout)
-      }
-
-      applyPlayerDailyDelta(result.delta)
-      applyCasinoDailyDelta(result.delta)
-      applyCasinoGameDailyDelta('dice', result.delta)
-      setDiceRolling(false)
-      setDiceRollFrame(0)
-      diceResolveTimeoutRef.current = null
-    }, 1400)
+    callCasino<{ values: number[]; total: number; won: boolean; payout: number; delta: number }>('dice/roll', {
+      bet,
+      mode: diceMode,
+      target: diceTarget,
+    })
+      .then((roll) => {
+        // the dice keep tumbling for at least the usual 1.4s, then land on the
+        // server's result
+        diceResolveTimeoutRef.current = window.setTimeout(() => {
+          stopRolling()
+          const result: RoundResult = {
+            message: roll.won
+              ? `${roll.total} lands ${diceMode === 'lower' ? 'below' : 'above'} ${diceTarget}.`
+              : `${roll.total} misses the ${diceMode} target of ${diceTarget}.`,
+            delta: roll.delta,
+            payout: roll.payout,
+          }
+          setDiceValues(roll.values)
+          setDiceResult(result)
+          setDiceMessage(
+            roll.won
+              ? `20 dice total ${roll.total}. You win $${roll.delta}.`
+              : `20 dice total ${roll.total}. The table keeps the bet.`,
+          )
+          setBankroll(roll.balance)
+          applyPlayerDailyDelta(result.delta)
+          applyCasinoDailyDelta(result.delta)
+          applyCasinoGameDailyDelta('dice', result.delta)
+          setDiceRolling(false)
+          setDiceRollFrame(0)
+          diceResolveTimeoutRef.current = null
+        }, Math.max(0, 1400 - (Date.now() - startedAt)))
+      })
+      .catch((error) => {
+        stopRolling()
+        setDiceRolling(false)
+        setDiceRollFrame(0)
+        setBankroll((currentBankroll) => currentBankroll + bet)
+        setDiceMessage('Pick a side, move the target, then roll all 20 dice.')
+        reportCasinoError(error)
+      })
   }
 
   const beginSlotsSpin = (
@@ -4129,60 +3125,76 @@ function App() {
   }
 
   const handleSpinSlots = () => {
-    if (slotsSpinning) {
+    if (slotsSpinning || slotsRequestPendingRef.current) {
       return
     }
 
     if (slotsBonusActive) {
-      const currentBet = slotsBonusBet || bet
       const previousBonusGrid = slotsBonusGrid.map((row) => [...row])
-      const { nextGrid, newOrbCount } = respinSlotsBonusGrid(previousBonusGrid, currentBet)
-      const respinsLeft = slotsBonusRespins
+      slotsRequestPendingRef.current = true
 
-      setSlotsMessage(
-        `Hold & spin in progress. ${respinsLeft} respin${respinsLeft === 1 ? '' : 's'} left.`,
-      )
-      beginSlotsSpin(previousBonusGrid, nextGrid, () => {
-        const filledCount = nextGrid.flat().filter(Boolean).length
-        const nextRespins = newOrbCount > 0 ? 3 : respinsLeft - 1
-
-        setSlotsBonusGrid(nextGrid)
-
-        if (filledCount === SLOT_ROWS * SLOT_COLUMNS || nextRespins <= 0) {
-          const bonusPayout = calculateSlotsBonusPayout(nextGrid, currentBet)
-          const totalPayout = slotsBonusBasePayout + bonusPayout.totalPayout
-          const result: RoundResult = {
-            message: `Bonus complete. You collected $${bonusPayout.totalPayout}.`,
-            delta: totalPayout - currentBet,
-            payout: bonusPayout.totalPayout,
-          }
-
-          setSlotsBonusActive(false)
-          setSlotsBonusRespins(0)
-          setSlotsResult(result)
-          setSlotsMessage(
-            `${result.message} ${
-              bonusPayout.hitGrand
-                ? `Grand jackpot lands for $${slotsJackpots.grand}.`
-                : bonusPayout.majorCount > 0 || bonusPayout.minorCount > 0 || bonusPayout.miniCount > 0
-                  ? 'Jackpot orb hits included.'
-                  : `Orb total $${bonusPayout.orbValueTotal}.`
-            }`,
-          )
-          setBankroll((currentBankroll) => currentBankroll + result.payout)
-          applyPlayerDailyDelta(result.delta)
-          applyCasinoDailyDelta(result.delta)
-          applyCasinoGameDailyDelta('slots', result.delta)
-          return
+      callCasino<{
+        grid: (SlotCell | null)[][]
+        newOrbCount: number
+        respins: number
+        done: boolean
+        bet: number
+        basePayout: number
+        bonusPayout?: {
+          totalPayout: number
+          orbValueTotal: number
+          miniCount: number
+          minorCount: number
+          majorCount: number
+          hitGrand: boolean
         }
+      }>('slots/respin')
+        .then((respin) => {
+          setSlotsMessage(
+            `Hold & spin in progress. ${slotsBonusRespins} respin${slotsBonusRespins === 1 ? '' : 's'} left.`,
+          )
+          beginSlotsSpin(previousBonusGrid, respin.grid, () => {
+            setSlotsBonusGrid(respin.grid)
 
-        setSlotsBonusRespins(nextRespins)
-        setSlotsMessage(
-          newOrbCount > 0
-            ? `${newOrbCount} new orb${newOrbCount === 1 ? '' : 's'} locked in. Respins reset to 3.`
-            : `No new orb this spin. ${nextRespins} respin${nextRespins === 1 ? '' : 's'} left.`,
-        )
-      })
+            if (respin.done && respin.bonusPayout) {
+              const bonusPayout = respin.bonusPayout
+              const result: RoundResult = {
+                message: `Bonus complete. You collected $${bonusPayout.totalPayout}.`,
+                delta: respin.basePayout + bonusPayout.totalPayout - respin.bet,
+                payout: bonusPayout.totalPayout,
+              }
+
+              setSlotsBonusActive(false)
+              setSlotsBonusRespins(0)
+              setSlotsResult(result)
+              setSlotsMessage(
+                `${result.message} ${
+                  bonusPayout.hitGrand
+                    ? `Grand jackpot lands for $${getSlotJackpotValues(respin.bet).grand}.`
+                    : bonusPayout.majorCount > 0 || bonusPayout.minorCount > 0 || bonusPayout.miniCount > 0
+                      ? 'Jackpot orb hits included.'
+                      : `Orb total $${bonusPayout.orbValueTotal}.`
+                }`,
+              )
+              setBankroll(respin.balance)
+              applyPlayerDailyDelta(result.delta)
+              applyCasinoDailyDelta(result.delta)
+              applyCasinoGameDailyDelta('slots', result.delta)
+              return
+            }
+
+            setSlotsBonusRespins(respin.respins)
+            setSlotsMessage(
+              respin.newOrbCount > 0
+                ? `${respin.newOrbCount} new orb${respin.newOrbCount === 1 ? '' : 's'} locked in. Respins reset to 3.`
+                : `No new orb this spin. ${respin.respins} respin${respin.respins === 1 ? '' : 's'} left.`,
+            )
+          })
+        })
+        .catch(reportCasinoError)
+        .finally(() => {
+          slotsRequestPendingRef.current = false
+        })
       return
     }
 
@@ -4196,58 +3208,64 @@ function App() {
       return
     }
 
-    setBankroll((currentBankroll) => currentBankroll - bet)
+    const spinBet = bet
+    const previousGrid = slotsGrid.map((row) => [...row])
+    slotsRequestPendingRef.current = true
     setBetInputError('')
 
-    const previousGrid = slotsGrid.map((row) => [...row])
-    const finalGrid = createSlotsFinalGrid(bet)
+    callCasino<{
+      grid: SlotCell[][]
+      orbCount: number
+      totalPayout: number
+      winningLines: string[]
+      bonus: { bet: number; basePayout: number; grid: (SlotCell | null)[][]; respins: number } | null
+    }>('slots/spin', { bet: spinBet })
+      .then((spin) => {
+        // the bet leaves the bankroll as the reels start; winnings land after
+        setBankroll(spin.balance - spin.totalPayout)
+        setSlotsBonusBasePayout(0)
+        setSlotsBonusBet(0)
+        setSlotsBonusGrid(createSlotsBonusGridFromSpin(createInitialSlotsGrid()))
+        setSlotsMessage('Reels are spinning...')
 
-    setSlotsBonusBasePayout(0)
-    setSlotsBonusBet(0)
-    setSlotsBonusGrid(createSlotsBonusGridFromSpin(createInitialSlotsGrid()))
-    setSlotsMessage('Reels are spinning...')
+        beginSlotsSpin(previousGrid, spin.grid, () => {
+          setSlotsGrid(spin.grid)
+          setBankroll(spin.balance)
 
-    beginSlotsSpin(previousGrid, finalGrid, () => {
-      const orbCount = countSlotsBonusSymbols(finalGrid)
-      const { totalPayout, winningLines } = calculateSlotsLinePayout(finalGrid, bet)
+          if (spin.bonus) {
+            setSlotsBonusActive(true)
+            setSlotsBonusGrid(spin.bonus.grid)
+            setSlotsBonusRespins(spin.bonus.respins)
+            setSlotsBonusBasePayout(spin.totalPayout)
+            setSlotsBonusBet(spinBet)
+            setSlotsMessage(
+              `${spin.orbCount} link orbs trigger the bonus. ${
+                spin.totalPayout > 0 ? `$${spin.totalPayout} line win banked. ` : ''
+              }Press the bonus button to respin.`,
+            )
+            return
+          }
 
-      setSlotsGrid(finalGrid)
+          const result: RoundResult = {
+            message: spin.totalPayout > 0 ? `${spin.winningLines.join('. ')}.` : 'No line hit this spin.',
+            delta: spin.totalPayout - spinBet,
+            payout: spin.totalPayout,
+          }
 
-      if (orbCount >= 6) {
-        setSlotsBonusActive(true)
-        setSlotsBonusGrid(createSlotsBonusGridFromSpin(finalGrid))
-        setSlotsBonusRespins(3)
-        setSlotsBonusBasePayout(totalPayout)
-        setSlotsBonusBet(bet)
-        if (totalPayout > 0) {
-          setBankroll((currentBankroll) => currentBankroll + totalPayout)
-        }
-        setSlotsMessage(
-          `${orbCount} link orbs trigger the bonus. ${
-            totalPayout > 0 ? `$${totalPayout} line win banked. ` : ''
-          }Press the bonus button to respin.`,
-        )
-        return
-      }
-
-      const result: RoundResult = {
-        message: totalPayout > 0 ? `${winningLines.join('. ')}.` : 'No line hit this spin.',
-        delta: totalPayout - bet,
-        payout: totalPayout,
-      }
-
-      setSlotsResult(result)
-      setSlotsWinningCells(totalPayout > 0 ? getSlotsWinningCells(finalGrid) : null)
-      setSlotsMessage(
-        totalPayout > 0 ? `${result.message} You win $${totalPayout}.` : 'No hit this time. Spin again.',
-      )
-      if (totalPayout > 0) {
-        setBankroll((currentBankroll) => currentBankroll + result.payout)
-      }
-      applyPlayerDailyDelta(result.delta)
-      applyCasinoDailyDelta(result.delta)
-      applyCasinoGameDailyDelta('slots', result.delta)
-    })
+          setSlotsResult(result)
+          setSlotsWinningCells(spin.totalPayout > 0 ? getSlotsWinningCells(spin.grid) : null)
+          setSlotsMessage(
+            spin.totalPayout > 0 ? `${result.message} You win $${spin.totalPayout}.` : 'No hit this time. Spin again.',
+          )
+          applyPlayerDailyDelta(result.delta)
+          applyCasinoDailyDelta(result.delta)
+          applyCasinoGameDailyDelta('slots', result.delta)
+        })
+      })
+      .catch(reportCasinoError)
+      .finally(() => {
+        slotsRequestPendingRef.current = false
+      })
   }
 
   const handleOpenSettings = () => {
@@ -4275,14 +3293,18 @@ function App() {
       return
     }
 
-    const nextBankroll = normalizeBankroll(selectedSettingsPlayer.bankroll + amount)
-    const nextProfile = {
-      ...selectedSettingsPlayer,
-      bankroll: nextBankroll,
-      updatedAt: new Date().toISOString(),
-    }
-
-    persistLocalPlayerProfile(nextProfile)
+    const targetPlayerId = selectedSettingsPlayer.id
+    callCasino('admin/adjust', { targetPlayerId, amount })
+      .then((response) => {
+        if (targetPlayerId === playerProfile.id) {
+          setBankroll(response.balance)
+        }
+        setSettingsPlayers((players) =>
+          players.map((profile) => (profile.id === targetPlayerId ? { ...profile, bankroll: response.balance } : profile)),
+        )
+        setSettingsPlayerDetailBankroll(String(response.balance))
+      })
+      .catch((error) => setSettingsPlayerDetailError(error instanceof Error ? error.message : 'Could not change that.'))
   }
 
   const handleSaveSettingsPlayerDetail = () => {
@@ -4303,16 +3325,26 @@ function App() {
       return
     }
 
-    const nextProfile = {
+    // the name is a profile field; the balance can only be set by the server
+    persistLocalPlayerProfile({
       ...selectedSettingsPlayer,
       name: trimmedName,
       nameLocked: settingsPlayerDetailNameLocked,
-      bankroll: normalizeBankroll(parsedBankroll),
       updatedAt: new Date().toISOString(),
-    }
+    })
 
-    persistLocalPlayerProfile(nextProfile)
-    setSettingsPlayerDetailError('')
+    const targetPlayerId = selectedSettingsPlayer.id
+    callCasino('admin/set-balance', { targetPlayerId, bankroll: normalizeBankroll(parsedBankroll) })
+      .then((response) => {
+        if (targetPlayerId === playerProfile.id) {
+          setBankroll(response.balance)
+        }
+        setSettingsPlayers((players) =>
+          players.map((profile) => (profile.id === targetPlayerId ? { ...profile, bankroll: response.balance } : profile)),
+        )
+        setSettingsPlayerDetailError('')
+      })
+      .catch((error) => setSettingsPlayerDetailError(error instanceof Error ? error.message : 'Could not save that.'))
   }
 
   const handleDeleteSettingsPlayer = async () => {
@@ -4325,24 +3357,19 @@ function App() {
       return
     }
 
-    deleteLocalPlayerProfile(selectedSettingsPlayer.id)
-    clearPendingCashout(selectedSettingsPlayer.id)
-
-    const profileRef = getDeveloperPlayerDocRef(selectedSettingsPlayer.id)
-
-    if (profileRef) {
-      try {
-        await deleteDoc(profileRef)
-      } catch (error) {
-        console.error('Failed to delete player profile', error)
-        setSettingsPlayerDetailError('Could not delete that player right now.')
-        return
-      }
+    const targetPlayerId = selectedSettingsPlayer.id
+    try {
+      // the server wipes their balance and removes the record
+      await callCasino('admin/delete-player', { targetPlayerId })
+    } catch (error) {
+      console.error('Failed to delete player profile', error)
+      setSettingsPlayerDetailError(error instanceof Error ? error.message : 'Could not delete that player right now.')
+      return
     }
 
-    setSettingsPlayers((currentPlayers) =>
-      currentPlayers.filter((profile) => profile.id !== selectedSettingsPlayer.id),
-    )
+    deleteLocalPlayerProfile(targetPlayerId)
+    clearPendingCashout(targetPlayerId)
+    setSettingsPlayers((currentPlayers) => currentPlayers.filter((profile) => profile.id !== targetPlayerId))
     setSelectedSettingsPlayerId('')
     setSettingsPlayerDetailError('')
     setSelectedGame('settings-players')
@@ -4478,21 +3505,38 @@ function App() {
       return
     }
 
-    const nextDrop: PendingPlinkoDrop = {
-      id: `plinko-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      bet,
-      centerBias: getPlinkoCenterBiasForWinStreak(plinkoWinStreak),
-    }
-
-    setBankroll((currentBankroll) => currentBankroll - bet)
-    setPendingPlinkoDrops((currentDrops) => [...currentDrops, nextDrop])
-    setPlinkoInFlightDrops((currentDrops) => currentDrops + 1)
-    setPlinkoResult(null)
-    setPlinkoMessage('Ball is in the air...')
+    const dropBet = bet
+    // the bet leaves right away so quick repeat drops can't overspend
+    setBankroll((currentBankroll) => currentBankroll - dropBet)
     setBetInputError('')
+
+    callCasino<{ seed: number; centerBias: number; slotIndex: number; multiplier: number; payout: number }>(
+      'plinko/drop',
+      { bet: dropBet },
+    )
+      .then((drop) => {
+        const nextDrop: PendingPlinkoDrop = {
+          id: `plinko-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          bet: dropBet,
+          centerBias: drop.centerBias,
+          seed: drop.seed,
+          slotIndex: drop.slotIndex,
+          payout: drop.payout,
+          balanceAfter: drop.balance,
+        }
+        plinkoLatestBalanceRef.current = drop.balance
+        setPendingPlinkoDrops((currentDrops) => [...currentDrops, nextDrop])
+        setPlinkoInFlightDrops((currentDrops) => currentDrops + 1)
+        setPlinkoResult(null)
+        setPlinkoMessage('Ball is in the air...')
+      })
+      .catch((error) => {
+        setBankroll((currentBankroll) => currentBankroll + dropBet)
+        reportCasinoError(error)
+      })
   }
 
-  const handleSettlePlinkoDrop = (dropId: string, slotIndex: number) => {
+  const handleSettlePlinkoDrop = (dropId: string, landedSlotIndex: number) => {
     // Settle each ball exactly once. The side effects live OUT here (not inside
     // a setState updater) so React StrictMode's double-invoked updaters can't
     // pay out or decrement the live count twice.
@@ -4507,12 +3551,23 @@ function App() {
 
     settledPlinkoIdsRef.current.add(dropId)
 
+    // the server decided the slot; the ball replays that exact path
+    const slotIndex = settledDrop.slotIndex
+    if (landedSlotIndex !== slotIndex) {
+      console.warn('Plinko replay drifted', { landedSlotIndex, slotIndex })
+    }
     const multiplier = PLINKO_MULTIPLIERS[slotIndex]
-    const payout = roundMoney(settledDrop.bet * multiplier)
+    const payout = settledDrop.payout
     const net = roundMoney(payout - settledDrop.bet)
     const round: PlinkoRound = { id: dropId, bet: settledDrop.bet, slotIndex, multiplier, payout, net }
+    const stillInFlight = pendingPlinkoDropsRef.current.filter((drop) => drop.id !== dropId)
 
-    setBankroll((currentBankroll) => currentBankroll + payout)
+    // once the last ball lands, match the server's balance exactly
+    if (stillInFlight.length === 0) {
+      setBankroll(plinkoLatestBalanceRef.current ?? settledDrop.balanceAfter)
+    } else {
+      setBankroll((currentBankroll) => currentBankroll + payout)
+    }
     applyPlayerDailyDelta(net)
     applyCasinoDailyDelta(net)
     applyCasinoGameDailyDelta('plinko', net)
@@ -4576,8 +3631,7 @@ function App() {
       return
     }
     jetstreamPendingRef.current = null
-    const { flight, bet: stake } = pending
-    const payout = roundMoney(stake * flight.payoutMultiplier)
+    const { flight, bet: stake, payout, balance } = pending
     const net = roundMoney(payout - stake)
     const round: JetstreamRound = {
       id: flight.id,
@@ -4587,9 +3641,7 @@ function App() {
       net,
       cashed: flight.landed,
     }
-    if (payout > 0) {
-      setBankroll((currentBankroll) => currentBankroll + payout)
-    }
+    setBankroll(balance)
     applyPlayerDailyDelta(net)
     applyCasinoDailyDelta(net)
     applyCasinoGameDailyDelta('jetstream', net)
@@ -4610,7 +3662,7 @@ function App() {
   }
 
   const handleLaunchJetstream = () => {
-    if (jetstreamStatus === 'flying' || jetstreamPendingRef.current) {
+    if (jetstreamStatus === 'flying' || jetstreamPendingRef.current || jetstreamRequestPendingRef.current) {
       return
     }
     if (!canPlaceBets) {
@@ -4622,15 +3674,24 @@ function App() {
       return
     }
 
-    const flight = generateJetFlight(jetstreamSpeed)
-    setBankroll((currentBankroll) => currentBankroll - bet)
-    jetstreamPendingRef.current = { flight, bet }
-    setJetstreamBet(bet)
-    setJetstreamFlight(flight)
-    setJetstreamResult(null)
-    setJetstreamStatus('flying')
+    const stake = bet
+    jetstreamRequestPendingRef.current = true
     setBetInputError('')
-    setJetstreamMessage(`${JET_SPEEDS[jetstreamSpeed].label} flight in the air — it has to reach the carrier.`)
+    callCasino<{ flight: JetFlight; payout: number }>('jetstream/launch', { bet: stake, speed: jetstreamSpeed })
+      .then((launch) => {
+        // the flight was fixed at takeoff; the balance updates when it lands
+        setBankroll(launch.balance - launch.payout)
+        jetstreamPendingRef.current = { flight: launch.flight, bet: stake, payout: launch.payout, balance: launch.balance }
+        setJetstreamBet(stake)
+        setJetstreamFlight(launch.flight)
+        setJetstreamResult(null)
+        setJetstreamStatus('flying')
+        setJetstreamMessage(`${JET_SPEEDS[jetstreamSpeed].label} flight in the air — it has to reach the carrier.`)
+      })
+      .catch(reportCasinoError)
+      .finally(() => {
+        jetstreamRequestPendingRef.current = false
+      })
   }
 
   // Leaving the table mid-flight still settles the bet (the outcome was fixed at takeoff).
@@ -4650,7 +3711,7 @@ function App() {
   }
 
   const handleStartChickenRun = () => {
-    if (chickenStatus === 'playing') {
+    if (chickenStatus === 'playing' || chickenHopLockRef.current) {
       return
     }
     if (!canPlaceBets) {
@@ -4662,15 +3723,23 @@ function App() {
       return
     }
 
-    setBankroll((currentBankroll) => currentBankroll - bet)
-    chickenHopLockRef.current = false
-    setChickenBet(bet)
-    setChickenLane(0)
-    setChickenDeathLane(null)
-    setChickenResult(null)
-    setChickenStatus('playing')
-    setChickenMessage('Tap Cross to hop into traffic — cash out any time.')
-    setBetInputError('')
+    const stake = bet
+    chickenHopLockRef.current = true
+    callCasino('chicken/start', { bet: stake, difficulty: chickenDifficulty })
+      .then((run) => {
+        setBankroll(run.balance)
+        setChickenBet(stake)
+        setChickenLane(0)
+        setChickenDeathLane(null)
+        setChickenResult(null)
+        setChickenStatus('playing')
+        setChickenMessage('Tap Cross to hop into traffic — cash out any time.')
+        setBetInputError('')
+      })
+      .catch(reportCasinoError)
+      .finally(() => {
+        chickenHopLockRef.current = false
+      })
   }
 
   const settleChickenRound = (round: ChickenRound) => {
@@ -4686,67 +3755,75 @@ function App() {
       return
     }
 
-    const nextLane = chickenLane + 1
-    if (nextLane > CHICKEN_LANES) {
+    if (chickenLane + 1 > CHICKEN_LANES) {
       return
     }
 
-    const config = getChickenConfig(chickenDifficulty)
     chickenHopLockRef.current = true
+    callCasino<{ survived: boolean; lane: number; multiplier: number }>('chicken/step')
+      .then((hop) => {
+        if (hop.survived) {
+          setChickenLane(hop.lane)
+          setChickenMessage(
+            hop.lane >= CHICKEN_LANES
+              ? `Final lane! ${formatChickenMultiplier(hop.multiplier)} — cash out now.`
+              : `Lane ${hop.lane}: ${formatChickenMultiplier(hop.multiplier)}. Cash out or push on.`,
+          )
+          window.setTimeout(() => {
+            chickenHopLockRef.current = false
+          }, 380)
+          return
+        }
 
-    if (rollChickenHop(config, nextLane - 1)) {
-      setChickenLane(nextLane)
-      const multiplier = config.multipliers[nextLane - 1]
-      setChickenMessage(
-        nextLane >= CHICKEN_LANES
-          ? `Final lane! ${formatChickenMultiplier(multiplier)} — cash out now.`
-          : `Lane ${nextLane}: ${formatChickenMultiplier(multiplier)}. Cash out or push on.`,
-      )
-      window.setTimeout(() => {
         chickenHopLockRef.current = false
-      }, 380)
-    } else {
-      setChickenDeathLane(nextLane)
-      setChickenStatus('dead')
-      const round: ChickenRound = {
-        id: `chicken-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        bet: chickenBet,
-        difficulty: chickenDifficulty,
-        lane: nextLane,
-        multiplier: 0,
-        payout: 0,
-        net: roundMoney(-chickenBet),
-        cashed: false,
-      }
-      settleChickenRound(round)
-      setChickenMessage(`Splat! A car got you on lane ${nextLane}. You lose $${chickenBet.toFixed(2)}.`)
-    }
+        setChickenDeathLane(hop.lane)
+        setChickenStatus('dead')
+        settleChickenRound({
+          id: `chicken-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          bet: chickenBet,
+          difficulty: chickenDifficulty,
+          lane: hop.lane,
+          multiplier: 0,
+          payout: 0,
+          net: roundMoney(-chickenBet),
+          cashed: false,
+        })
+        setChickenMessage(`Splat! A car got you on lane ${hop.lane}. You lose $${chickenBet.toFixed(2)}.`)
+      })
+      .catch((error) => {
+        chickenHopLockRef.current = false
+        reportCasinoError(error)
+      })
   }
 
   const handleChickenCashout = () => {
-    if (chickenStatus !== 'playing' || chickenLane < 1) {
+    if (chickenStatus !== 'playing' || chickenLane < 1 || chickenHopLockRef.current) {
       return
     }
 
-    const config = getChickenConfig(chickenDifficulty)
-    const multiplier = config.multipliers[chickenLane - 1]
-    const payout = roundMoney(chickenBet * multiplier)
-    const net = roundMoney(payout - chickenBet)
-
-    setBankroll((currentBankroll) => currentBankroll + payout)
-    chickenHopLockRef.current = false
-    setChickenStatus('cashed')
-    settleChickenRound({
-      id: `chicken-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      bet: chickenBet,
-      difficulty: chickenDifficulty,
-      lane: chickenLane,
-      multiplier,
-      payout,
-      net,
-      cashed: true,
-    })
-    setChickenMessage(`Cashed out at ${formatChickenMultiplier(multiplier)} for ${formatPoints(payout)} (+$${net.toFixed(2)}).`)
+    chickenHopLockRef.current = true
+    callCasino<{ lane: number; multiplier: number; payout: number; net: number }>('chicken/cashout')
+      .then((cashout) => {
+        setBankroll(cashout.balance)
+        setChickenStatus('cashed')
+        settleChickenRound({
+          id: `chicken-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          bet: chickenBet,
+          difficulty: chickenDifficulty,
+          lane: cashout.lane,
+          multiplier: cashout.multiplier,
+          payout: cashout.payout,
+          net: cashout.net,
+          cashed: true,
+        })
+        setChickenMessage(
+          `Cashed out at ${formatChickenMultiplier(cashout.multiplier)} for ${formatPoints(cashout.payout)} (+$${cashout.net.toFixed(2)}).`,
+        )
+      })
+      .catch(reportCasinoError)
+      .finally(() => {
+        chickenHopLockRef.current = false
+      })
   }
 
   const handleChoosePokerMode = (mode: 'join' | 'create') => {
@@ -4773,6 +3850,110 @@ function App() {
     setPokerActionError('')
   }
 
+  // ---------- poker: every action runs on the game server ----------
+
+  type PokerReply = {
+    room: PokerRoomState | null
+    hand: { handId: number; cards: Card[] } | null
+    allHands?: Record<string, Card[]>
+    removed?: boolean
+    cashOut?: number
+    balance?: number
+  }
+
+  // Merge the private cards this browser may see into the public table.
+  const withPokerHands = (game: PokerGameState | null): PokerGameState | null => {
+    if (!game) {
+      return null
+    }
+    const hands = pokerHandsRef.current
+    const players = Object.fromEntries(
+      Object.entries(game.players).map(([playerId, player]) => {
+        const hand = hands[playerId]
+        const visible =
+          player.holeCards.length === 0 && hand && hand.handId === (game.handId ?? game.actionId)
+            ? hand.cards
+            : player.holeCards
+        return [playerId, { ...player, holeCards: visible }]
+      }),
+    ) as Record<string, PokerPlayerState>
+    return { ...game, players }
+  }
+
+  const applyPokerRoom = (room: PokerRoomState) => {
+    pokerPublicRoomRef.current = room
+    setPokerSeats(room.seats)
+    setPokerHostId(room.hostId)
+    setPokerDealerSeatIndex(room.dealerSeatIndex)
+    setPokerPlayerChips(room.playerChips)
+    setPokerGame(withPokerHands(room.game))
+    setPokerPendingStart(room.pendingStart)
+    setPokerBuyIn(room.buyIn)
+    setPokerBuyInInput(String(room.buyIn))
+    setPokerSmallBlind(room.smallBlind)
+    setPokerSmallBlindInput(String(room.smallBlind))
+    setPokerBigBlind(room.bigBlind)
+    setPokerMessage(
+      room.pendingStart
+        ? `Waiting for players to confirm the ${formatPoints(room.pendingStart.buyIn)} entry.`
+        : room.game?.winnerMessage ?? room.game?.lastAction ?? getPokerRoomMessage(room.seats.filter(Boolean).length),
+    )
+  }
+
+  const absorbPokerReply = (reply: PokerReply) => {
+    const handId = reply.room?.game?.handId ?? reply.room?.game?.actionId ?? 0
+    if (reply.hand) {
+      pokerHandsRef.current = { ...pokerHandsRef.current, [pokerPlayerId]: reply.hand }
+    }
+    if (reply.allHands) {
+      pokerHandsRef.current = {
+        ...pokerHandsRef.current,
+        ...Object.fromEntries(Object.entries(reply.allHands).map(([id, cards]) => [id, { handId, cards }])),
+      }
+    }
+    if (typeof reply.balance === 'number') {
+      setBankroll(reply.balance)
+    }
+    if (reply.room && !reply.removed) {
+      applyPokerRoom(reply.room)
+    }
+  }
+
+  const leavePokerUi = (message: string) => {
+    setSelectedGame('lobby')
+    setPokerScreen('entry')
+    setPokerRoomCode('')
+    setPokerHostId('')
+    setPokerDealerSeatIndex(-1)
+    setPokerPlayerChips({})
+    setPokerSeats(Array.from({ length: 6 }, () => null))
+    setPokerGame(null)
+    setPokerPendingStart(null)
+    setPokerMessage(message)
+    setBetInputError('')
+    setPokerActionError('')
+    pokerHandsRef.current = {}
+    pokerPublicRoomRef.current = null
+  }
+
+  const pokerAct = async (action: string, params: Record<string, unknown> = {}) => {
+    if (!pokerRoomCode) {
+      return null
+    }
+    try {
+      const reply = await callCasino<PokerReply>(`poker/${action}`, { code: pokerRoomCode, ...params })
+      setPokerActionError('')
+      absorbPokerReply(reply)
+      return reply
+    } catch (error) {
+      setPokerActionError(error instanceof Error ? error.message : 'The poker table had a problem. Try again.')
+      if (error instanceof CasinoError && typeof error.balance === 'number') {
+        setBankroll(error.balance)
+      }
+      return null
+    }
+  }
+
   const handleSubmitPoker = async (mode: 'join' | 'create') => {
     const trimmedName = hasSavedPlayerName ? playerProfile.name.trim() : pokerName.trim()
     const trimmedCode = pokerCode.trim().toUpperCase()
@@ -4787,87 +3968,34 @@ function App() {
       return
     }
 
-    if (mode === 'join') {
-      if (!/^[A-Z0-9]{4}$/.test(trimmedCode)) {
-        setBetInputError('Join codes must be exactly 4 letters or numbers.')
-        return
-      }
-
-      const nextRoom = await readPokerRoom(trimmedCode)
-
-      if (!nextRoom) {
-        setBetInputError('That room code is not active.')
-        return
-      }
-
-      const existingSeatIndex = nextRoom.seats.findIndex((seat) => seat?.id === pokerPlayerId)
-      const nextOpenSeat = nextRoom.seats.findIndex((seat) => seat === null)
-
-      if (existingSeatIndex === -1 && nextOpenSeat === -1) {
-        setBetInputError('That table is already full.')
-        return
-      }
-
-      const updatedSeats = [...nextRoom.seats]
-      updatedSeats[existingSeatIndex === -1 ? nextOpenSeat : existingSeatIndex] = {
-        id: pokerPlayerId,
-        name: trimmedName,
-      }
-
-      await writePokerRoom({ ...nextRoom, seats: updatedSeats })
-      setPokerCode(trimmedCode)
-      setPokerRoomCode(trimmedCode)
-      setPokerHostId(nextRoom.hostId)
-      setPokerDealerSeatIndex(nextRoom.dealerSeatIndex)
-      setPokerPlayerChips(nextRoom.playerChips)
-      setPokerSeats(updatedSeats)
-      setPokerGame(nextRoom.game)
-      setPokerBuyIn(nextRoom.buyIn)
-      setPokerBuyInInput(String(nextRoom.buyIn))
-      setPokerScreen('table')
-      setPokerMessage(
-        nextRoom.game?.winnerMessage ?? nextRoom.game?.lastAction ?? getPokerRoomMessage(updatedSeats.filter(Boolean).length),
-      )
-      setBetInputError('')
-      setPokerActionError('')
+    if (mode === 'join' && !/^[A-Z0-9]{4}$/.test(trimmedCode)) {
+      setBetInputError('Join codes must be exactly 4 letters or numbers.')
       return
     }
 
-    let nextCode = createPokerRoomCode()
-
-    while (await readPokerRoom(nextCode)) {
-      nextCode = createPokerRoomCode()
+    try {
+      const reply =
+        mode === 'join'
+          ? await callCasino<PokerReply>('poker/join', { code: trimmedCode, name: trimmedName })
+          : await callCasino<PokerReply>('poker/create', {
+              name: trimmedName,
+              buyIn: pokerBuyIn,
+              smallBlind: pokerSmallBlind,
+            })
+      if (!reply.room) {
+        setBetInputError('That room code is not active.')
+        return
+      }
+      pokerHandsRef.current = {}
+      absorbPokerReply(reply)
+      setPokerCode(reply.room.code)
+      setPokerRoomCode(reply.room.code)
+      setPokerScreen('table')
+      setBetInputError('')
+      setPokerActionError('')
+    } catch (error) {
+      setBetInputError(error instanceof Error ? error.message : 'Could not reach the poker table.')
     }
-
-    const nextSeats = Array.from({ length: 6 }, (_, index) =>
-      index === 4 ? { id: pokerPlayerId, name: trimmedName } : null,
-    )
-    const nextRoom = {
-      code: nextCode,
-      buyIn: pokerBuyIn,
-      smallBlind: pokerSmallBlind,
-      bigBlind: pokerBigBlind,
-      hostId: pokerPlayerId,
-      dealerSeatIndex: -1,
-      playerChips: {},
-      seats: nextSeats,
-      game: null,
-      pendingStart: null,
-    }
-
-    await writePokerRoom(nextRoom)
-    setPokerRoomCode(nextCode)
-    setPokerHostId(pokerPlayerId)
-    setPokerDealerSeatIndex(nextRoom.dealerSeatIndex)
-    setPokerPlayerChips(nextRoom.playerChips)
-    setPokerCode(nextCode)
-    setPokerSeats(nextSeats)
-    setPokerGame(null)
-    setPokerPendingStart(null)
-    setPokerScreen('table')
-    setPokerMessage(getPokerRoomMessage(nextSeats.filter(Boolean).length))
-    setBetInputError('')
-    setPokerActionError('')
   }
 
   const applyPokerBuyIn = async () => {
@@ -4884,15 +4012,11 @@ function App() {
     }
 
     if (pokerRoomCode) {
-      const activeRoom = await readPokerRoom(pokerRoomCode)
-
-      if (activeRoom) {
-        await writePokerRoom({ ...activeRoom, buyIn: parsedBuyIn })
-      }
+      await pokerAct('buyIn', { buyIn: parsedBuyIn })
+    } else {
+      setPokerBuyIn(parsedBuyIn)
+      setPokerBuyInInput(String(parsedBuyIn))
     }
-
-    setPokerBuyIn(parsedBuyIn)
-    setPokerBuyInInput(String(parsedBuyIn))
     setBetInputError('')
   }
 
@@ -4904,641 +4028,61 @@ function App() {
       return
     }
 
-    const parsedBigBlind = parsedSmallBlind * 2
-
     if (pokerRoomCode) {
-      const activeRoom = await readPokerRoom(pokerRoomCode)
-
-      if (activeRoom) {
-        await writePokerRoom({
-          ...activeRoom,
-          smallBlind: parsedSmallBlind,
-          bigBlind: parsedBigBlind,
-        })
-      }
+      await pokerAct('blinds', { smallBlind: parsedSmallBlind })
+    } else {
+      setPokerSmallBlind(parsedSmallBlind)
+      setPokerSmallBlindInput(String(parsedSmallBlind))
+      setPokerBigBlind(parsedSmallBlind * 2)
     }
-
-    setPokerSmallBlind(parsedSmallBlind)
-    setPokerSmallBlindInput(String(parsedSmallBlind))
-    setPokerBigBlind(parsedBigBlind)
     setBetInputError('')
   }
 
-  const updatePokerRoom = async (updater: (room: PokerRoomState) => PokerRoomState | null) => {
-    if (!pokerRoomCode) {
-      return
-    }
-
-    const activeRoom = await readPokerRoom(pokerRoomCode)
-
-    if (!activeRoom) {
-      setPokerActionError('That poker room is no longer active.')
-      return
-    }
-
-    const nextRoom = updater(activeRoom)
-
-    if (!nextRoom) {
-      return
-    }
-
-    await writePokerRoom(nextRoom)
-    setPokerSeats(nextRoom.seats)
-    setPokerHostId(nextRoom.hostId)
-    setPokerDealerSeatIndex(nextRoom.dealerSeatIndex)
-    setPokerPlayerChips(nextRoom.playerChips)
-    setPokerGame(nextRoom.game)
-    setPokerPendingStart(nextRoom.pendingStart)
-    setPokerBuyIn(nextRoom.buyIn)
-    setPokerBuyInInput(String(nextRoom.buyIn))
-    setPokerSmallBlind(nextRoom.smallBlind)
-    setPokerSmallBlindInput(String(nextRoom.smallBlind))
-    setPokerBigBlind(nextRoom.bigBlind)
-    setPokerMessage(
-      nextRoom.pendingStart
-        ? `Waiting for players to confirm the ${formatPoints(nextRoom.pendingStart.buyIn)} entry.`
-        : nextRoom.game?.winnerMessage ?? nextRoom.game?.lastAction ?? getPokerRoomMessage(nextRoom.seats.filter(Boolean).length),
-    )
-  }
-
-  const resolvePokerShowdown = (room: PokerRoomState): PokerRoomState => {
-    if (!room.game) {
-      return room
-    }
-
-    const eligibleSeats = room.seats
-      .map((seat, index) => ({ seat, index }))
-      .filter(
-        ({ seat }) =>
-          seat &&
-          room.game &&
-          room.game.players[seat.id] &&
-          !room.game.players[seat.id].folded,
-      ) as { seat: PokerSeat; index: number }[]
-
-    const scores = eligibleSeats.map(({ seat }) => ({
-      seat,
-      score: evaluateBestPokerHand([
-        ...room.game!.communityCards,
-        ...room.game!.players[seat.id].holeCards,
-      ]),
-    }))
-
-    const bestScore = scores.reduce<number[]>(
-      (best, entry) => (comparePokerScores(entry.score, best) > 0 ? entry.score : best),
-      [-1],
-    )
-    const winners = scores.filter((entry) => comparePokerScores(entry.score, bestScore) === 0)
-    const splitAmount = winners.length > 0 ? Math.floor(room.game.pot / winners.length) : 0
-    const remainder = winners.length > 0 ? room.game.pot % winners.length : 0
-    const nextPlayerChips = { ...room.playerChips }
-
-    winners.forEach((winner, index) => {
-      nextPlayerChips[winner.seat.id] =
-        (nextPlayerChips[winner.seat.id] ?? room.buyIn) + splitAmount + (index === 0 ? remainder : 0)
-    })
-
-    return {
-      ...room,
-      playerChips: nextPlayerChips,
-      game: {
-        ...room.game,
-        street: 'showdown',
-        activeSeatIndex: -1,
-        actionId: room.game.actionId + 1,
-        lastActorId: winners.length === 1 ? winners[0].seat.id : null,
-        lastActionType: 'showdown' as PokerActionType,
-        lastContributions: [],
-        winnerMessage:
-          winners.length === 1
-            ? `${winners[0].seat.name} wins the pot of $${room.game.pot}.`
-            : `${winners.map((winner) => winner.seat.name).join(' and ')} split the pot of $${room.game.pot}.`,
-        lastAction: 'Hand complete.',
-      },
-    }
-  }
-
-  const advancePokerStreet = (room: PokerRoomState): PokerRoomState => {
-    if (!room.game) {
-      return room
-    }
-
-    const remainingPlayers = room.seats
-      .map((seat) => (seat ? room.game!.players[seat.id] : null))
-      .filter(Boolean) as PokerPlayerState[]
-
-    if (remainingPlayers.filter((player) => !player.folded).length <= 1) {
-      const winningSeat = room.seats.find((seat) => seat && !room.game!.players[seat.id].folded)
-
-      if (!winningSeat) {
-        return room
-      }
-
-      return {
-        ...room,
-        playerChips: {
-          ...room.playerChips,
-          [winningSeat.id]: (room.playerChips[winningSeat.id] ?? room.buyIn) + room.game.pot,
-        },
-        game: {
-          ...room.game,
-          street: 'showdown',
-          activeSeatIndex: -1,
-          actionId: room.game.actionId + 1,
-          lastActorId: winningSeat.id,
-          lastActionType: 'showdown' as PokerActionType,
-          lastContributions: [],
-          winnerMessage: `${winningSeat.name} wins the pot of $${room.game.pot}.`,
-          lastAction: 'Hand complete.',
-        },
-      }
-    }
-
-    const activePlayers = room.seats
-      .map((seat, index) => ({ seat, index }))
-      .filter(
-        ({ seat }) =>
-          seat &&
-          room.game &&
-          room.game.players[seat.id] &&
-          !room.game.players[seat.id].folded &&
-          !room.game.players[seat.id].allIn,
-      ) as { seat: PokerSeat; index: number }[]
-
-    const everyoneMatched =
-      activePlayers.length === 0 ||
-      activePlayers.every(
-        ({ seat }) =>
-          room.game!.players[seat.id].acted &&
-          room.game!.players[seat.id].committed === room.game!.currentBet,
-      )
-
-    if (!everyoneMatched) {
-      return room
-    }
-
-    let nextStreet: PokerStreet = room.game.street
-    let cardsToDraw = 0
-
-    if (room.game.street === 'preflop') {
-      nextStreet = 'flop'
-      cardsToDraw = 3
-    } else if (room.game.street === 'flop') {
-      nextStreet = 'turn'
-      cardsToDraw = 1
-    } else if (room.game.street === 'turn') {
-      nextStreet = 'river'
-      cardsToDraw = 1
-    } else {
-      return resolvePokerShowdown(room)
-    }
-
-    const { drawnCards, remainingDeck } = drawCards(room.game.deck, cardsToDraw)
-    const nextPlayers = Object.fromEntries(
-      Object.entries(room.game.players).map(([playerId, playerState]) => [
-        playerId,
-        { ...playerState, committed: 0, acted: playerState.allIn },
-      ]),
-    ) as Record<string, PokerPlayerState>
-    const nextActiveSeatIndex = getNextPokerSeatIndex(
-      room.seats,
-      room.dealerSeatIndex,
-      (seat) =>
-        Boolean(
-          seat &&
-            nextPlayers[seat.id] &&
-            !nextPlayers[seat.id].folded &&
-            !nextPlayers[seat.id].allIn,
-        ),
-    )
-
-    const nextRoom = {
-      ...room,
-      game: {
-        ...room.game,
-        street: nextStreet,
-        currentBet: 0,
-        activeSeatIndex: nextActiveSeatIndex,
-        communityCards: [...room.game.communityCards, ...drawnCards],
-        deck: remainingDeck,
-        players: nextPlayers,
-        actionId: room.game.actionId + 1,
-        // keep the action that closed the round, so everyone still sees it
-        lastActorId: room.game.lastActorId,
-        lastActionType: room.game.lastActorId ? room.game.lastActionType : ('street' as PokerActionType),
-        lastContributions: room.game.lastContributions ?? [],
-        lastAction: `${room.game.lastActorId ? `${room.game.lastAction} ` : ''}${nextStreet.charAt(0).toUpperCase()}${nextStreet.slice(1)} card(s) are out.`,
-        winnerMessage: null,
-      },
-    }
-
-    const allRemainingAreAllIn = room.seats.every((seat) => {
-      if (!seat) {
-        return true
-      }
-
-      const playerState = nextPlayers[seat.id]
-      return playerState.folded || playerState.allIn
-    })
-
-    return allRemainingAreAllIn ? advancePokerStreet(nextRoom) : nextRoom
-  }
-
   const handleStartPokerGame = () => {
-    updatePokerRoom((room) => {
-      if (room.hostId !== pokerPlayerId || room.seats.filter(Boolean).length < 2) {
-        setPokerActionError('Only the host can start the game once 2 or more players are seated.')
-        return null
-      }
-
-      const playersNeedingBuyIn = room.seats
-        .filter(Boolean)
-        .map((seat) => seat as PokerSeat)
-        .filter((seat) => (room.playerChips[seat.id] ?? 0) <= 0)
-        .map((seat) => seat.id)
-
-      setPokerActionError('')
-
-      if (playersNeedingBuyIn.length === 0) {
-        return startPokerHand(room)
-      }
-
-      return {
-        ...room,
-        game: null,
-        pendingStart: {
-          buyIn: room.buyIn,
-          playerIds: playersNeedingBuyIn,
-          confirmedPlayerIds: [],
-        },
-      }
-    })
+    void pokerAct('start')
   }
 
-  const handleConfirmPokerBuyIn = () => {
-    updatePokerRoom((room) => {
-      if (!room.pendingStart || !pokerYouSeat) {
-        return null
-      }
-
-      if ((room.playerChips[pokerPlayerId] ?? 0) <= 0 && bankroll < room.pendingStart.buyIn) {
-        const nextSeats = room.seats.map((seat) => (seat?.id === pokerPlayerId ? null : seat))
-        const nextPlayerChips = { ...room.playerChips }
-        delete nextPlayerChips[pokerPlayerId]
-        const remainingSeats = nextSeats.filter(Boolean) as PokerSeat[]
-        const nextHostId =
-          room.hostId === pokerPlayerId ? remainingSeats[0]?.id ?? '' : room.hostId
-        const nextPendingStart = {
-          ...room.pendingStart,
-          playerIds: room.pendingStart.playerIds.filter((playerId) => playerId !== pokerPlayerId),
-          confirmedPlayerIds: room.pendingStart.confirmedPlayerIds.filter(
-            (playerId) => playerId !== pokerPlayerId,
-          ),
-        }
-
-        setSelectedGame('lobby')
-        setPokerScreen('entry')
-        setPokerRoomCode('')
-        setPokerHostId('')
-        setPokerDealerSeatIndex(-1)
-        setPokerPlayerChips({})
-        setPokerSeats(Array.from({ length: 6 }, () => null))
-        setPokerGame(null)
-        setPokerPendingStart(null)
-        setPokerMessage(`You need at least ${formatPoints(room.pendingStart.buyIn)} to join and were removed from the table.`)
-        setPokerInsufficientFundsModal(true)
-        setBetInputError('')
-        setPokerActionError('')
-
-        return {
-          ...room,
-          hostId: nextHostId,
-          seats: nextSeats,
-          playerChips: nextPlayerChips,
-          pendingStart:
-            remainingSeats.length >= 2 && nextPendingStart.playerIds.length > 0
-              ? nextPendingStart
-              : null,
-          game: null,
-        }
-      }
-
-      const confirmedPlayerIds = room.pendingStart.confirmedPlayerIds.includes(pokerPlayerId)
-        ? room.pendingStart.confirmedPlayerIds
-        : [...room.pendingStart.confirmedPlayerIds, pokerPlayerId]
-      const nextPlayerChips = { ...room.playerChips }
-      const needsDeposit = (nextPlayerChips[pokerPlayerId] ?? 0) <= 0
-
-      if (needsDeposit) {
-        nextPlayerChips[pokerPlayerId] = room.pendingStart.buyIn
-        setBankroll((currentBankroll) => currentBankroll - room.pendingStart!.buyIn)
-      }
-
-      const confirmationsNeeded = room.pendingStart.playerIds.length
-
-      if (confirmedPlayerIds.length < confirmationsNeeded) {
-        setPokerActionError('')
-        return {
-          ...room,
-          playerChips: nextPlayerChips,
-          pendingStart: {
-            ...room.pendingStart,
-            confirmedPlayerIds,
-          },
-        }
-      }
-
-      setPokerActionError('')
-      return startPokerHand({
-        ...room,
-        playerChips: nextPlayerChips,
-        pendingStart: null,
-      })
-    })
+  const handleConfirmPokerBuyIn = async () => {
+    const buyIn = pokerPendingStart?.buyIn ?? pokerBuyIn
+    const reply = await pokerAct('confirmBuyIn')
+    if (reply?.removed) {
+      leavePokerUi(`You need at least ${formatPoints(buyIn)} to join and were removed from the table.`)
+      setPokerInsufficientFundsModal(true)
+    }
   }
 
-  const handleDeclinePokerBuyIn = () => {
-    updatePokerRoom((room) => {
-      if (!pokerYouSeat) {
-        return null
-      }
-
-      const nextSeats = room.seats.map((seat) => (seat?.id === pokerPlayerId ? null : seat))
-      const nextPlayerChips = { ...room.playerChips }
-      delete nextPlayerChips[pokerPlayerId]
-      const remainingSeats = nextSeats.filter(Boolean) as PokerSeat[]
-      const nextHostId =
-        room.hostId === pokerPlayerId ? remainingSeats[0]?.id ?? '' : room.hostId
-      const nextPendingStart = room.pendingStart
-        ? {
-            ...room.pendingStart,
-            confirmedPlayerIds: room.pendingStart.confirmedPlayerIds.filter(
-              (playerId) => playerId !== pokerPlayerId,
-            ),
-          }
-        : null
-
-      const nextRoom = {
-        ...room,
-        hostId: nextHostId,
-        seats: nextSeats,
-        playerChips: nextPlayerChips,
-        pendingStart:
-          remainingSeats.length >= 2
-            ? nextPendingStart
-            : null,
-        game: null,
-      }
-
-      setSelectedGame('lobby')
-      setPokerScreen('entry')
-      setPokerRoomCode('')
-      setPokerHostId('')
-      setPokerDealerSeatIndex(-1)
-      setPokerPlayerChips({})
-      setPokerSeats(Array.from({ length: 6 }, () => null))
-      setPokerGame(null)
-      setPokerPendingStart(null)
-      setPokerMessage('You skipped the entry step and left the table.')
-      setBetInputError('')
-      setPokerActionError('')
-
-      return nextRoom
-    })
+  const handleDeclinePokerBuyIn = async () => {
+    const reply = await pokerAct('declineBuyIn')
+    if (reply) {
+      leavePokerUi('You skipped the entry step and left the table.')
+    }
   }
 
-  const handleCashOutPoker = () => {
-    updatePokerRoom((room) => {
-      if (!pokerYouSeat) {
-        return null
-      }
-
-      if (room.game && room.game.street !== 'showdown') {
-      setPokerActionError('You can leave after the current hand ends.')
-        return null
-      }
-
-      const cashOutAmount = room.playerChips[pokerPlayerId] ?? 0
-      const nextSeats = room.seats.map((seat) => (seat?.id === pokerPlayerId ? null : seat))
-      const nextPlayerChips = { ...room.playerChips }
-      delete nextPlayerChips[pokerPlayerId]
-      const remainingSeats = nextSeats.filter(Boolean) as PokerSeat[]
-      const nextHostId =
-        room.hostId === pokerPlayerId ? remainingSeats[0]?.id ?? '' : room.hostId
-      const nextPendingStart = room.pendingStart
-        ? {
-            ...room.pendingStart,
-            playerIds: room.pendingStart.playerIds.filter((playerId) => playerId !== pokerPlayerId),
-            confirmedPlayerIds: room.pendingStart.confirmedPlayerIds.filter(
-              (playerId) => playerId !== pokerPlayerId,
-            ),
-          }
-        : null
-
-      setBankroll((currentBankroll) => currentBankroll + cashOutAmount)
-      setSelectedGame('lobby')
-      setPokerScreen('entry')
-      setPokerRoomCode('')
-      setPokerHostId('')
-      setPokerDealerSeatIndex(-1)
-      setPokerPlayerChips({})
-      setPokerSeats(Array.from({ length: 6 }, () => null))
-      setPokerGame(null)
-      setPokerPendingStart(null)
-      setPokerMessage(
-        cashOutAmount > 0
-          ? `You cashed out $${cashOutAmount} and left the poker table.`
-          : 'You left the poker table.',
+  const handleCashOutPoker = async () => {
+    const reply = await pokerAct('leave')
+    if (reply) {
+      const cashOut = reply.cashOut ?? 0
+      leavePokerUi(
+        cashOut > 0 ? `You cashed out $${cashOut} and left the poker table.` : 'You left the poker table.',
       )
-      setBetInputError('')
-      setPokerActionError('')
-
-      return {
-        ...room,
-        hostId: nextHostId,
-        seats: nextSeats,
-        playerChips: nextPlayerChips,
-        pendingStart:
-          remainingSeats.length >= 2 && nextPendingStart && nextPendingStart.playerIds.length > 0
-            ? nextPendingStart
-            : null,
-        game: null,
-      }
-    })
+    }
   }
 
   const handlePokerFold = () => {
-    updatePokerRoom((room) => {
-      if (!room.game || pokerYouSeatIndex === -1 || room.game.activeSeatIndex !== pokerYouSeatIndex || !pokerYouSeat) {
-        return null
-      }
-
-      const nextPlayers = {
-        ...room.game.players,
-        [pokerYouSeat.id]: { ...room.game.players[pokerYouSeat.id], folded: true, acted: true },
-      }
-      const nextActiveSeatIndex = getNextPokerSeatIndex(
-        room.seats,
-        pokerYouSeatIndex,
-        (seat) =>
-          Boolean(
-            seat &&
-              nextPlayers[seat.id] &&
-              !nextPlayers[seat.id].folded &&
-              !nextPlayers[seat.id].allIn,
-          ),
-      )
-
-      setPokerActionError('')
-      return advancePokerStreet({
-        ...room,
-        game: {
-          ...room.game,
-          players: nextPlayers,
-          activeSeatIndex: nextActiveSeatIndex,
-          actionId: room.game.actionId + 1,
-          lastActorId: pokerYouSeat.id,
-          lastActionType: 'fold' as PokerActionType,
-          lastContributions: [],
-          lastAction: `${pokerYouSeat.name} folds.`,
-          winnerMessage: null,
-        },
-      })
-    })
+    void pokerAct('fold')
   }
 
   const handlePokerCallOrCheck = () => {
-    updatePokerRoom((room) => {
-      if (!room.game || pokerYouSeatIndex === -1 || room.game.activeSeatIndex !== pokerYouSeatIndex || !pokerYouSeat) {
-        return null
-      }
-
-      const playerState = room.game.players[pokerYouSeat.id]
-      const amountToCall = getPokerAmountToCall({
-        seats: room.seats,
-        dealerSeatIndex: room.dealerSeatIndex,
-        players: room.game.players,
-        currentBet: room.game.currentBet,
-        street: room.game.street,
-        smallBlind: room.smallBlind,
-        seatIndex: pokerYouSeatIndex,
-        seatId: pokerYouSeat.id,
-      })
-      const payment = Math.min(amountToCall, playerState.chips)
-      const nextPlayers = {
-        ...room.game.players,
-        [pokerYouSeat.id]: {
-          ...playerState,
-          chips: playerState.chips - payment,
-          committed: playerState.committed + payment,
-          acted: true,
-          allIn: playerState.chips === payment,
-        },
-      }
-      const nextPlayerChips = {
-        ...room.playerChips,
-        [pokerYouSeat.id]: playerState.chips - payment,
-      }
-      const nextActiveSeatIndex = getNextPokerSeatIndex(
-        room.seats,
-        pokerYouSeatIndex,
-        (seat) =>
-          Boolean(
-            seat &&
-              nextPlayers[seat.id] &&
-              !nextPlayers[seat.id].folded &&
-              !nextPlayers[seat.id].allIn,
-          ),
-      )
-
-      setPokerActionError('')
-      return advancePokerStreet({
-        ...room,
-        playerChips: nextPlayerChips,
-        game: {
-          ...room.game,
-          pot: room.game.pot + payment,
-          players: nextPlayers,
-          activeSeatIndex: nextActiveSeatIndex,
-          actionId: room.game.actionId + 1,
-          lastActorId: pokerYouSeat.id,
-          lastActionType: (amountToCall > 0 ? 'call' : 'check') as PokerActionType,
-          lastContributions: payment > 0 ? [{ playerId: pokerYouSeat.id, amount: payment }] : [],
-          lastAction: amountToCall > 0 ? `${pokerYouSeat.name} calls $${payment}.` : `${pokerYouSeat.name} checks.`,
-          winnerMessage: null,
-        },
-      })
-    })
+    void pokerAct('call')
   }
 
   const handlePokerRaise = () => {
-    updatePokerRoom((room) => {
-      if (!room.game || pokerYouSeatIndex === -1 || room.game.activeSeatIndex !== pokerYouSeatIndex || !pokerYouSeat) {
-        return null
-      }
-
-      const raiseTarget = Number(pokerRaiseInput)
-
-      if (!Number.isFinite(raiseTarget) || raiseTarget <= room.game.currentBet) {
-        setPokerActionError('Raise amount must be higher than the current bet.')
-        return null
-      }
-
-      const playerState = room.game.players[pokerYouSeat.id]
-      const additionalAmount = raiseTarget - playerState.committed
-
-      if (additionalAmount > playerState.chips) {
-        setPokerActionError('You do not have enough markers for that raise.')
-        return null
-      }
-
-      const nextPlayers = Object.fromEntries(
-        Object.entries(room.game.players).map(([playerId, state]) => [
-          playerId,
-          { ...state, acted: playerId === pokerYouSeat.id },
-        ]),
-      ) as Record<string, PokerPlayerState>
-      nextPlayers[pokerYouSeat.id] = {
-        ...nextPlayers[pokerYouSeat.id],
-        chips: playerState.chips - additionalAmount,
-        committed: raiseTarget,
-        allIn: playerState.chips === additionalAmount,
-      }
-
-      const nextActiveSeatIndex = getNextPokerSeatIndex(
-        room.seats,
-        pokerYouSeatIndex,
-        (seat) =>
-          Boolean(
-            seat &&
-              nextPlayers[seat.id] &&
-              !nextPlayers[seat.id].folded &&
-              !nextPlayers[seat.id].allIn,
-          ),
-      )
-
-      setPokerActionError('')
-      return {
-        ...room,
-        playerChips: {
-          ...room.playerChips,
-          [pokerYouSeat.id]: playerState.chips - additionalAmount,
-        },
-        game: {
-          ...room.game,
-          pot: room.game.pot + additionalAmount,
-          currentBet: raiseTarget,
-          players: nextPlayers,
-          activeSeatIndex: nextActiveSeatIndex,
-          actionId: room.game.actionId + 1,
-          lastActorId: pokerYouSeat.id,
-          lastActionType: 'raise' as PokerActionType,
-          lastContributions: additionalAmount > 0 ? [{ playerId: pokerYouSeat.id, amount: additionalAmount }] : [],
-          lastAction: `${pokerYouSeat.name} raises to $${raiseTarget}.`,
-          winnerMessage: null,
-        },
-      }
-    })
+    const raiseTarget = Number(pokerRaiseInput)
+    if (!Number.isFinite(raiseTarget) || !pokerGame || raiseTarget <= pokerGame.currentBet) {
+      setPokerActionError('Raise amount must be higher than the current bet.')
+      return
+    }
+    void pokerAct('raise', { target: raiseTarget })
   }
 
   const handleSelectRouletteBet = (nextBet: RouletteBet) => {
@@ -5606,123 +4150,41 @@ function App() {
       return
     }
 
-    const winningNumber: RoulettePocket =
-      ROULETTE_WHEEL_ORDER[Math.floor(Math.random() * ROULETTE_WHEEL_ORDER.length)]
-    const numericWinningNumber = typeof winningNumber === 'number' ? winningNumber : null
-    const isRed = numericWinningNumber !== null && ROULETTE_RED_NUMBERS.has(String(numericWinningNumber))
-    const isOdd = numericWinningNumber !== null && numericWinningNumber % 2 === 1
-    const result: RoundResult = (() => {
-      let delta = 0
-      let payout = 0
-      const messages = rouletteBets.map((entry) => {
-        const label = getRouletteBetDisplayLabel(entry.bet)
-
-        if (entry.bet.kind === 'number') {
-          const didWin = winningNumber === entry.bet.value
-          delta += didWin ? entry.amount * 35 : -entry.amount
-          payout += didWin ? entry.amount * 36 : 0
-          return didWin
-            ? `${label} hits for +$${entry.amount * 35}`
-            : `${label} misses for -$${entry.amount}`
-        }
-
-        if (entry.bet.kind === 'color') {
-          const didWin =
-            numericWinningNumber !== null && entry.bet.value === (isRed ? 'red' : 'black')
-          delta += didWin ? entry.amount : -entry.amount
-          payout += didWin ? entry.amount * 2 : 0
-          return didWin
-            ? `${label} wins +$${entry.amount}`
-            : `${label} loses -$${entry.amount}`
-        }
-
-        if (entry.bet.kind === 'parity') {
-          const didWin =
-            numericWinningNumber !== null && entry.bet.value === (isOdd ? 'odd' : 'even')
-          delta += didWin ? entry.amount : -entry.amount
-          payout += didWin ? entry.amount * 2 : 0
-          return didWin
-            ? `${label} wins +$${entry.amount}`
-            : `${label} loses -$${entry.amount}`
-        }
-
-        if (entry.bet.kind === 'column') {
-          const didWin =
-            numericWinningNumber !== null &&
-            ((entry.bet.value === 'column-1' && numericWinningNumber % 3 === 1) ||
-              (entry.bet.value === 'column-2' && numericWinningNumber % 3 === 2) ||
-              (entry.bet.value === 'column-3' && numericWinningNumber % 3 === 0))
-          delta += didWin ? entry.amount * 2 : -entry.amount
-          payout += didWin ? entry.amount * 3 : 0
-          return didWin
-            ? `${label} wins +$${entry.amount * 2}`
-            : `${label} loses -$${entry.amount}`
-        }
-
-        const didWin =
-          numericWinningNumber !== null &&
-          ((entry.bet.value === '1-18' &&
-            numericWinningNumber >= 1 &&
-            numericWinningNumber <= 18) ||
-            (entry.bet.value === '19-36' &&
-              numericWinningNumber >= 19 &&
-              numericWinningNumber <= 36) ||
-            (entry.bet.value === '1-12' &&
-              numericWinningNumber >= 1 &&
-              numericWinningNumber <= 12) ||
-            (entry.bet.value === '13-24' &&
-              numericWinningNumber >= 13 &&
-              numericWinningNumber <= 24) ||
-            (entry.bet.value === '25-36' &&
-              numericWinningNumber >= 25 &&
-              numericWinningNumber <= 36))
-
-        const payoutMultiplier =
-          entry.bet.value === '1-12' ||
-          entry.bet.value === '13-24' ||
-          entry.bet.value === '25-36'
-            ? 2
-            : 1
-
-        delta += didWin ? entry.amount * payoutMultiplier : -entry.amount
-        payout += didWin ? entry.amount * (payoutMultiplier + 1) : 0
-        return didWin
-          ? `${label} wins +$${entry.amount * payoutMultiplier}`
-          : `${label} loses -$${entry.amount}`
-      })
-
-      return {
-        message: `Ball lands on ${winningNumber}. ${messages.join('. ')}.`,
-        delta,
-        payout,
-      }
-    })()
-
-    const targetRotation = getRouletteBallAngleForPocket(winningNumber)
-    setRouletteWinningNumber(null)
-    setRouletteResult(null)
     setRouletteIsSpinning(true)
-    setBankroll((currentBankroll) => currentBankroll - rouletteTotalBet)
-    if (rouletteWheelRef.current && rouletteBallRef.current) {
-      rouletteSpinPoseRef.current = runRouletteSpin(
-        rouletteWheelRef.current,
-        rouletteBallRef.current,
-        rouletteSpinPoseRef.current,
-        targetRotation,
-        ROULETTE_SPIN_DURATION_MS,
-      )
-    }
     setBetInputError('')
 
-    window.setTimeout(() => {
-      setRouletteWinningNumber(winningNumber)
-      setRouletteResult(result)
-      setBankroll((currentBankroll) => currentBankroll + result.payout)
-      applyPlayerDailyDelta(result.delta)
-      applyCasinoDailyDelta(result.delta)
-      applyCasinoGameDailyDelta('roulette', result.delta)
-      setRouletteIsSpinning(false)
-    }, ROULETTE_SPIN_DURATION_MS)
+    callCasino<{ winningNumber: RoulettePocket; result: RoundResult; totalBet: number }>('roulette/spin', {
+      bets: rouletteBets.map((entry) => ({ bet: entry.bet, amount: entry.amount })),
+    })
+      .then((spin) => {
+        const winningNumber = spin.winningNumber
+        setRouletteWinningNumber(null)
+        setRouletteResult(null)
+        setBankroll(spin.balance - spin.result.payout)
+        if (rouletteWheelRef.current && rouletteBallRef.current) {
+          rouletteSpinPoseRef.current = runRouletteSpin(
+            rouletteWheelRef.current,
+            rouletteBallRef.current,
+            rouletteSpinPoseRef.current,
+            getRouletteBallAngleForPocket(winningNumber),
+            ROULETTE_SPIN_DURATION_MS,
+          )
+        }
+
+        window.setTimeout(() => {
+          setRouletteWinningNumber(winningNumber)
+          setRouletteResult(spin.result)
+          setBankroll(spin.balance)
+          applyPlayerDailyDelta(spin.result.delta)
+          applyCasinoDailyDelta(spin.result.delta)
+          applyCasinoGameDailyDelta('roulette', spin.result.delta)
+          setRouletteIsSpinning(false)
+        }, ROULETTE_SPIN_DURATION_MS)
+      })
+      .catch((error) => {
+        setRouletteIsSpinning(false)
+        reportCasinoError(error)
+      })
   }
 
   const rouletteTotalBet = rouletteBets.reduce((sum, entry) => sum + entry.amount, 0)
@@ -5751,7 +4213,8 @@ function App() {
     return Number(card.rank)
   }
 
-  const hiLoOdds = getHiLoOdds(hiLoDeck, hiLoCurrentCard, getHiLoValue)
+  const hiLoOdds = hiLoServerOdds
+
   const hiLoCashOutAmount = hiLoStreak > 0 ? Math.round(bet * hiLoMultiplier) : 0
   const hiLoHigherNextAmount =
     hiLoCurrentCard && hiLoOdds.higherStepMultiplier > 0
@@ -5768,6 +4231,10 @@ function App() {
       hiLoResolveTimeoutRef.current = null
     }
 
+    if (hiLoRequestPendingRef.current) {
+      return
+    }
+
     if (!canPlaceBets) {
       setBetInputError('You are out of points.')
       return
@@ -5778,123 +4245,140 @@ function App() {
       return
     }
 
-    const freshDeck = createShuffledDeck()
-    const { drawnCard, remainingDeck } = drawRandomCard(freshDeck)
-    const { drawnCard: nextUpcomingCard } = drawRandomCard(remainingDeck)
-    setBankroll((currentBankroll) => currentBankroll - bet)
-    setHiLoCurrentCard(drawnCard)
-    setHiLoUpcomingCard(nextUpcomingCard)
-    setHiLoNextCard(null)
-    setHiLoDeck(remainingDeck)
-    setHiLoGuess(null)
-    setHiLoResult(null)
-    setHiLoStreak(0)
-    setHiLoMultiplier(1)
-    setHiLoResolving(false)
-    setHiLoSliding(false)
-    setHiLoMessage('Guess whether the next card will be higher or lower.')
-    setBetInputError('')
+    hiLoRequestPendingRef.current = true
+    callCasino<{ currentCard: Card; odds: HiLoOdds; upcomingCard?: Card }>('hilo/start', { bet })
+      .then((round) => {
+        setBankroll(round.balance)
+        setHiLoCurrentCard(round.currentCard)
+        setHiLoUpcomingCard(round.upcomingCard ?? null)
+        setHiLoServerOdds(round.odds)
+        setHiLoNextCard(null)
+        setHiLoGuess(null)
+        setHiLoResult(null)
+        setHiLoStreak(0)
+        setHiLoMultiplier(1)
+        setHiLoResolving(false)
+        setHiLoSliding(false)
+        setHiLoMessage('Guess whether the next card will be higher or lower.')
+        setBetInputError('')
+      })
+      .catch(reportCasinoError)
+      .finally(() => {
+        hiLoRequestPendingRef.current = false
+      })
   }
 
   const handleGuessHiLo = (guess: 'higher' | 'lower') => {
-    if (!hiLoCurrentCard || hiLoResult || hiLoResolving) {
+    if (!hiLoCurrentCard || hiLoResult || hiLoResolving || hiLoRequestPendingRef.current) {
       return
     }
 
-    const stepMultiplier =
-      guess === 'higher' ? hiLoOdds.higherStepMultiplier : hiLoOdds.lowerStepMultiplier
+    const stepMultiplier = guess === 'higher' ? hiLoOdds.higherStepMultiplier : hiLoOdds.lowerStepMultiplier
 
     if (stepMultiplier <= 0) {
       setHiLoMessage(`No cards are left that can go ${guess} from here.`)
       return
     }
 
-    const nextCard = hiLoUpcomingCard ?? drawRandomCard(hiLoDeck).drawnCard
-    const remainingDeck = removeCardFromDeck(hiLoDeck, nextCard)
-    const currentValue = getHiLoValue(hiLoCurrentCard)
-    const nextValue = getHiLoValue(nextCard)
-    const isPush = currentValue === nextValue
-    const didWin = guess === 'higher' ? nextValue > currentValue : nextValue < currentValue
+    hiLoRequestPendingRef.current = true
+    callCasino<{
+      nextCard: Card
+      outcome: 'push' | 'win' | 'lose'
+      streak: number
+      multiplier: number
+      odds?: HiLoOdds
+      upcomingCard?: Card | null
+    }>('hilo/guess', { guess })
+      .then((reveal) => {
+        // Reveal: the next card mounts and slides in (see the layout effect
+        // above), then it becomes the current card.
+        setHiLoGuess(guess)
+        setHiLoNextCard(reveal.nextCard)
+        setHiLoResolving(true)
+        setHiLoSliding(true)
 
-    // Reveal: the next card mounts and slides in from the right (CSS keyframe on
-    // .hilo-card--overlay), covering the back. Once it has settled we commit it
-    // as the new current card. One timer, so the reveal always plays.
-    setHiLoGuess(guess)
-    setHiLoNextCard(nextCard)
-    setHiLoResolving(true)
-    setHiLoSliding(true)
+        hiLoResolveTimeoutRef.current = window.setTimeout(() => {
+          setHiLoCurrentCard(reveal.nextCard)
+          setHiLoUpcomingCard(reveal.upcomingCard ?? null)
+          setHiLoNextCard(null)
+          if (reveal.odds) {
+            setHiLoServerOdds(reveal.odds)
+          }
+          setHiLoResolving(false)
+          setHiLoSliding(false)
+          hiLoResolveTimeoutRef.current = null
 
-    hiLoResolveTimeoutRef.current = window.setTimeout(() => {
-      const nextUpcomingCard =
-        remainingDeck.length > 0 ? drawRandomCard(remainingDeck).drawnCard : null
+          if (reveal.outcome === 'push') {
+            setHiLoMessage(`Push. Multiplier stays at x${reveal.multiplier.toFixed(2)}. Keep going.`)
+            return
+          }
 
-      setHiLoCurrentCard(nextCard)
-      setHiLoUpcomingCard(nextUpcomingCard)
-      setHiLoNextCard(null)
-      setHiLoDeck(remainingDeck)
-      setHiLoResolving(false)
-      setHiLoSliding(false)
+          if (reveal.outcome === 'win') {
+            setHiLoStreak(reveal.streak)
+            setHiLoMultiplier(reveal.multiplier)
+            setHiLoMessage(
+              `Correct. Multiplier is now x${reveal.multiplier.toFixed(2)}. Cash out for $${Math.round(
+                bet * reveal.multiplier,
+              )} or keep going.`,
+            )
+            return
+          }
 
-      if (isPush) {
-        setHiLoMessage(`Push. Multiplier stays at x${hiLoMultiplier.toFixed(2)}. Keep going.`)
-        hiLoResolveTimeoutRef.current = null
-        return
-      }
+          const result: RoundResult = {
+            message: `${reveal.nextCard.rank}${reveal.nextCard.suit} is not ${guess}. You lose.`,
+            delta: -bet,
+            payout: 0,
+          }
 
-      if (didWin) {
-        const nextStreak = hiLoStreak + 1
-        const nextMultiplier = Number((hiLoMultiplier * stepMultiplier).toFixed(2))
-        const nextCashOut = Math.round(bet * nextMultiplier)
-        setHiLoStreak(nextStreak)
-        setHiLoMultiplier(nextMultiplier)
-        setHiLoMessage(
-          `Correct. Multiplier is now x${nextMultiplier.toFixed(2)}. Cash out for $${nextCashOut} or keep going.`,
-        )
-        hiLoResolveTimeoutRef.current = null
-        return
-      }
-
-      const result: RoundResult = {
-        message: `${nextCard.rank}${nextCard.suit} is not ${guess}. You lose.`,
-        delta: -bet,
-        payout: 0,
-      }
-
-      setHiLoResult(result)
-      setHiLoMessage(result.message)
-      applyPlayerDailyDelta(result.delta)
-      applyCasinoDailyDelta(result.delta)
-      applyCasinoGameDailyDelta('hilo', result.delta)
-      hiLoResolveTimeoutRef.current = null
-    }, 880)
+          setHiLoResult(result)
+          setHiLoMessage(result.message)
+          setBankroll(reveal.balance)
+          applyPlayerDailyDelta(result.delta)
+          applyCasinoDailyDelta(result.delta)
+          applyCasinoGameDailyDelta('hilo', result.delta)
+        }, 880)
+      })
+      .catch(reportCasinoError)
+      .finally(() => {
+        hiLoRequestPendingRef.current = false
+      })
   }
 
   const handleCashOutHiLo = () => {
-    if (!hiLoCurrentCard || hiLoResult || hiLoStreak === 0 || hiLoResolving) {
+    if (!hiLoCurrentCard || hiLoResult || hiLoStreak === 0 || hiLoResolving || hiLoRequestPendingRef.current) {
       return
     }
 
-    const winnings = Math.round(bet * hiLoMultiplier)
-    const result: RoundResult = {
-      message: `Cashed out after ${hiLoStreak} correct guess${
-        hiLoStreak === 1 ? '' : 'es'
-      }.`,
-      delta: winnings - bet,
-      payout: winnings,
-    }
+    hiLoRequestPendingRef.current = true
+    callCasino<{ payout: number; streak: number }>('hilo/cashout')
+      .then((cashout) => {
+        const result: RoundResult = {
+          message: `Cashed out after ${cashout.streak} correct guess${cashout.streak === 1 ? '' : 'es'}.`,
+          delta: cashout.payout - bet,
+          payout: cashout.payout,
+        }
 
-    setHiLoNextCard(null)
-    setHiLoUpcomingCard(null)
-    setHiLoResult(result)
-    setHiLoSliding(false)
-    setHiLoMessage(`${result.message} You banked $${winnings}.`)
-    setBankroll((currentBankroll) => currentBankroll + result.payout)
-    applyPlayerDailyDelta(result.delta)
-    applyCasinoDailyDelta(result.delta)
-    applyCasinoGameDailyDelta('hilo', result.delta)
+        setHiLoNextCard(null)
+        setHiLoUpcomingCard(null)
+        setHiLoResult(result)
+        setHiLoSliding(false)
+        setHiLoMessage(`${result.message} You banked $${cashout.payout}.`)
+        setBankroll(cashout.balance)
+        applyPlayerDailyDelta(result.delta)
+        applyCasinoDailyDelta(result.delta)
+        applyCasinoGameDailyDelta('hilo', result.delta)
+      })
+      .catch(reportCasinoError)
+      .finally(() => {
+        hiLoRequestPendingRef.current = false
+      })
   }
 
   const handleStartMines = () => {
+    if (minesRequestPendingRef.current) {
+      return
+    }
+
     if (!canPlaceBets) {
       setBetInputError('You are out of points.')
       return
@@ -5905,19 +4389,28 @@ function App() {
       return
     }
 
-    setBankroll((currentBankroll) => currentBankroll - bet)
-    setMinesBoard(createMinesBoard(minesCount))
-    setMinesSafePicks(0)
-    setMinesResult(null)
-    setMinesRoundActive(true)
-    setMinesMessage(
-      `Pick a tile. ${minesCount} mines are hidden in the 5x5 field, and each safe pick compounds your multiplier.`,
-    )
-    setBetInputError('')
+    minesRequestPendingRef.current = true
+    callCasino<{ mineCount: number; mineIds?: number[] }>('mines/start', { bet, mines: minesCount })
+      .then((round) => {
+        setBankroll(round.balance)
+        // the mines stay on the server; a developer is shown where they are
+        setMinesBoard(createMinesBoard(round.mineIds ?? []))
+        setMinesSafePicks(0)
+        setMinesResult(null)
+        setMinesRoundActive(true)
+        setMinesMessage(
+          `Pick a tile. ${minesCount} mines are hidden in the 5x5 field, and each safe pick compounds your multiplier.`,
+        )
+        setBetInputError('')
+      })
+      .catch(reportCasinoError)
+      .finally(() => {
+        minesRequestPendingRef.current = false
+      })
   }
 
   const handleRevealMinesTile = (tileId: number) => {
-    if (!minesRoundActive || minesResult) {
+    if (!minesRoundActive || minesResult || minesRequestPendingRef.current) {
       return
     }
 
@@ -5927,124 +4420,155 @@ function App() {
       return
     }
 
-    if (nextTile.isMine) {
-      const nextBoard = minesBoard.map((tile) =>
-        tile.id === tileId
-          ? { ...tile, revealed: true, hit: true }
-          : tile.isMine
-            ? { ...tile, revealed: true }
-            : tile,
-      )
-      const result: RoundResult = {
-        message: 'Mine hit. The whole bet is gone.',
-        delta: -bet,
-        payout: 0,
-      }
+    minesRequestPendingRef.current = true
+    callCasino<{
+      mine: boolean
+      mineIds?: number[]
+      safePicks?: number
+      multiplier?: number
+      cleared?: boolean
+      payout?: number
+    }>('mines/reveal', { tileId })
+      .then((reveal) => {
+        const mineIds = new Set(reveal.mineIds ?? [])
 
-      setMinesBoard(nextBoard)
-      setMinesResult(result)
-      setMinesRoundActive(false)
-      setMinesMessage('Mine hit. Start another round to try again.')
-      applyPlayerDailyDelta(result.delta)
-      applyCasinoDailyDelta(result.delta)
-      applyCasinoGameDailyDelta('mines', result.delta)
-      return
-    }
+        if (reveal.mine) {
+          setMinesBoard((board) =>
+            board.map((tile) =>
+              tile.id === tileId
+                ? { ...tile, isMine: true, revealed: true, hit: true }
+                : mineIds.has(tile.id)
+                  ? { ...tile, isMine: true, revealed: true }
+                  : tile,
+            ),
+          )
+          const result: RoundResult = { message: 'Mine hit. The whole bet is gone.', delta: -bet, payout: 0 }
+          setMinesResult(result)
+          setMinesRoundActive(false)
+          setMinesMessage('Mine hit. Start another round to try again.')
+          setBankroll(reveal.balance)
+          applyPlayerDailyDelta(result.delta)
+          applyCasinoDailyDelta(result.delta)
+          applyCasinoGameDailyDelta('mines', result.delta)
+          return
+        }
 
-    const nextSafePicks = minesSafePicks + 1
-    const nextBoard = minesBoard.map((tile) =>
-      tile.id === tileId
-        ? { ...tile, revealed: true, multiplier: getMinesMultiplier(nextSafePicks, minesCount) }
-        : tile,
-    )
-    const nextCashOutAmount = Math.round(bet * getMinesMultiplier(nextSafePicks, minesCount))
+        const safePicks = reveal.safePicks ?? minesSafePicks + 1
+        const multiplier = reveal.multiplier ?? getMinesMultiplier(safePicks, minesCount)
+        setMinesBoard((board) =>
+          board.map((tile) =>
+            tile.id === tileId
+              ? { ...tile, isMine: false, revealed: true, multiplier }
+              : reveal.cleared && mineIds.has(tile.id)
+                ? { ...tile, isMine: true, revealed: true }
+                : tile,
+          ),
+        )
+        setMinesSafePicks(safePicks)
 
-    setMinesBoard(nextBoard)
-    setMinesSafePicks(nextSafePicks)
+        if (reveal.cleared) {
+          const payout = reveal.payout ?? 0
+          const result: RoundResult = {
+            message: 'Every safe tile is cleared. You swept the whole board.',
+            delta: payout - bet,
+            payout,
+          }
+          setMinesResult(result)
+          setMinesRoundActive(false)
+          setMinesMessage(`Board cleared. You banked $${payout}.`)
+          setBankroll(reveal.balance)
+          applyPlayerDailyDelta(result.delta)
+          applyCasinoDailyDelta(result.delta)
+          applyCasinoGameDailyDelta('mines', result.delta)
+          return
+        }
 
-    if (nextSafePicks === minesSafeTiles) {
-      const result: RoundResult = {
-        message: 'Every safe tile is cleared. You swept the whole board.',
-        delta: nextCashOutAmount - bet,
-        payout: nextCashOutAmount,
-      }
-
-      setMinesResult(result)
-      setMinesRoundActive(false)
-      setMinesMessage(`Board cleared. You banked $${nextCashOutAmount}.`)
-      setBankroll((currentBankroll) => currentBankroll + result.payout)
-      applyPlayerDailyDelta(result.delta)
-      applyCasinoDailyDelta(result.delta)
-      applyCasinoGameDailyDelta('mines', result.delta)
-      return
-    }
-
-    setMinesMessage(
-      `Safe pick ${nextSafePicks}. Multiplier is x${getMinesMultiplier(
-        nextSafePicks,
-        minesCount,
-      ).toFixed(2)} and the current collect value is ${formatPoints(nextCashOutAmount)}.`,
-    )
+        setMinesMessage(
+          `Safe pick ${safePicks}. Multiplier is x${multiplier.toFixed(2)} and the current collect value is ${formatPoints(
+            Math.round(bet * multiplier),
+          )}.`,
+        )
+      })
+      .catch(reportCasinoError)
+      .finally(() => {
+        minesRequestPendingRef.current = false
+      })
   }
 
   const handleCashOutMines = () => {
-    if (!minesRoundActive || minesSafePicks === 0) {
+    if (!minesRoundActive || minesSafePicks === 0 || minesRequestPendingRef.current) {
       return
     }
 
-    const result: RoundResult = {
-      message: `Cashed out after ${minesSafePicks} safe pick${minesSafePicks === 1 ? '' : 's'}.`,
-      delta: minesCashOutAmount - bet,
-      payout: minesCashOutAmount,
-    }
+    minesRequestPendingRef.current = true
+    callCasino<{ payout: number; safePicks: number }>('mines/cashout')
+      .then((cashout) => {
+        const result: RoundResult = {
+          message: `Cashed out after ${cashout.safePicks} safe pick${cashout.safePicks === 1 ? '' : 's'}.`,
+          delta: cashout.payout - bet,
+          payout: cashout.payout,
+        }
 
-    setMinesResult(result)
-    setMinesRoundActive(false)
-    setMinesMessage(`You banked $${minesCashOutAmount}. Start another round whenever you're ready.`)
-    setBankroll((currentBankroll) => currentBankroll + result.payout)
-    applyPlayerDailyDelta(result.delta)
-    applyCasinoDailyDelta(result.delta)
-    applyCasinoGameDailyDelta('mines', result.delta)
+        setMinesResult(result)
+        setMinesRoundActive(false)
+        setMinesMessage(`You banked $${cashout.payout}. Start another round whenever you're ready.`)
+        setBankroll(cashout.balance)
+        applyPlayerDailyDelta(result.delta)
+        applyCasinoDailyDelta(result.delta)
+        applyCasinoGameDailyDelta('mines', result.delta)
+      })
+      .catch(reportCasinoError)
+      .finally(() => {
+        minesRequestPendingRef.current = false
+      })
   }
 
-  const advanceOrResolveRound = (
-    nextHands: Card[][],
-    nextHandBets: number[],
-    nextCompletedHands: boolean[],
-    nextDeck: Card[],
-  ) => {
-    const nextOpenHand = nextCompletedHands.findIndex((isCompleted) => !isCompleted)
+  type BlackjackTable = {
+    playerHands: Card[][]
+    handBets: number[]
+    completedHands: boolean[]
+    activeHandIndex: number
+    dealerHand: Card[]
+    resolved: boolean
+    result?: RoundResult
+  }
 
-    if (nextOpenHand !== -1) {
-      setPlayerHands(nextHands)
-      setHandBets(nextHandBets)
-      setCompletedHands(nextCompletedHands)
-      setActiveHandIndex(nextOpenHand)
-      setDeck(nextDeck)
+  const applyBlackjackTable = (table: CasinoResponse<BlackjackTable>) => {
+    setPlayerHands(table.playerHands)
+    setHandBets(table.handBets)
+    setCompletedHands(table.completedHands)
+    setActiveHandIndex(table.activeHandIndex)
+    setDealerHand(table.dealerHand)
+    setBankroll(table.balance)
+
+    if (table.resolved && table.result) {
+      setDealerRevealed(true)
+      setRoundResult(table.result)
+      applyPlayerDailyDelta(table.result.delta)
+      applyCasinoDailyDelta(table.result.delta)
+      applyCasinoGameDailyDelta('blackjack', table.result.delta)
+    }
+  }
+
+  const playBlackjack = (action: 'hit' | 'stand' | 'double' | 'split') => {
+    if (blackjackRequestPendingRef.current) {
       return
     }
 
-    const hasLiveHand = nextHands.some((hand) => getHandValue(hand) <= 21)
-    const dealerResolution = hasLiveHand
-      ? finishDealerHand(dealerHand, nextDeck)
-      : { finalDealerHand: dealerHand, remainingDeck: nextDeck }
-    const result = getRoundResult(nextHands, dealerResolution.finalDealerHand, nextHandBets)
-
-    setPlayerHands(nextHands)
-    setHandBets(nextHandBets)
-    setCompletedHands(nextCompletedHands)
-    setActiveHandIndex(Math.max(0, nextHands.length - 1))
-    setDealerHand(dealerResolution.finalDealerHand)
-    setDeck(dealerResolution.remainingDeck)
-    setDealerRevealed(true)
-    setRoundResult(result)
-    setBankroll((currentBankroll) => currentBankroll + result.payout)
-    applyPlayerDailyDelta(result.delta)
-    applyCasinoDailyDelta(result.delta)
-    applyCasinoGameDailyDelta('blackjack', result.delta)
+    blackjackRequestPendingRef.current = true
+    callCasino<BlackjackTable>('blackjack/act', { action })
+      .then(applyBlackjackTable)
+      .catch(reportCasinoError)
+      .finally(() => {
+        blackjackRequestPendingRef.current = false
+      })
   }
 
   const handleDeal = () => {
+    if (blackjackRequestPendingRef.current) {
+      return
+    }
+
     if (!canPlaceBets) {
       setBetInputError('You are out of points.')
       return
@@ -6055,43 +4579,27 @@ function App() {
       return
     }
 
-    const { drawnCards, remainingDeck } = drawCards(deck, 4)
-    const [playerFirstCard, dealerFirstCard, playerSecondCard, dealerSecondCard] = drawnCards
-
-    setBankroll((currentBankroll) => currentBankroll - bet)
-    setPlayerHands([[playerFirstCard, playerSecondCard]])
-    setHandBets([bet])
-    setCompletedHands([false])
-    setActiveHandIndex(0)
-    setDealerHand([dealerFirstCard, dealerSecondCard])
-    setDeck(remainingDeck)
-    setDealerRevealed(false)
-    setRoundResult(null)
-    setBetInput(String(bet))
-    setBetInputError('')
+    blackjackRequestPendingRef.current = true
+    callCasino<BlackjackTable>('blackjack/deal', { bet })
+      .then((table) => {
+        setDealerRevealed(false)
+        setRoundResult(null)
+        setBetInput(String(bet))
+        setBetInputError('')
+        applyBlackjackTable(table)
+      })
+      .catch(reportCasinoError)
+      .finally(() => {
+        blackjackRequestPendingRef.current = false
+      })
   }
 
   const handleHit = () => {
-    const { drawnCards, remainingDeck } = drawCards(deck, 1)
-    const nextHands = playerHands.map((hand, index) =>
-      index === activeHandIndex ? [...hand, drawnCards[0]] : hand,
-    )
-    const nextCompletedHands = [...completedHands]
-
-    if (getHandValue(nextHands[activeHandIndex]) > 21) {
-      nextCompletedHands[activeHandIndex] = true
-      advanceOrResolveRound(nextHands, handBets, nextCompletedHands, remainingDeck)
-      return
-    }
-
-    setPlayerHands(nextHands)
-    setDeck(remainingDeck)
+    playBlackjack('hit')
   }
 
   const handleStand = () => {
-    const nextCompletedHands = [...completedHands]
-    nextCompletedHands[activeHandIndex] = true
-    advanceOrResolveRound(playerHands, handBets, nextCompletedHands, deck)
+    playBlackjack('stand')
   }
 
   const handleDouble = () => {
@@ -6099,18 +4607,7 @@ function App() {
       return
     }
 
-    setBankroll((currentBankroll) => currentBankroll - currentHandBet)
-    const { drawnCards, remainingDeck } = drawCards(deck, 1)
-    const nextHands = playerHands.map((hand, index) =>
-      index === activeHandIndex ? [...hand, drawnCards[0]] : hand,
-    )
-    const nextHandBets = handBets.map((handBet, index) =>
-      index === activeHandIndex ? handBet * 2 : handBet,
-    )
-    const nextCompletedHands = [...completedHands]
-    nextCompletedHands[activeHandIndex] = true
-
-    advanceOrResolveRound(nextHands, nextHandBets, nextCompletedHands, remainingDeck)
+    playBlackjack('double')
   }
 
   const handleSplit = () => {
@@ -6118,24 +4615,7 @@ function App() {
       return
     }
 
-    setBankroll((currentBankroll) => currentBankroll - currentHandBet)
-    const { drawnCards, remainingDeck } = drawCards(deck, 2)
-    const splitHandLeft = [currentHand[0], drawnCards[0]]
-    const splitHandRight = [currentHand[1], drawnCards[1]]
-    const nextHands = [...playerHands]
-    nextHands.splice(activeHandIndex, 1, splitHandLeft, splitHandRight)
-
-    const nextHandBets = [...handBets]
-    nextHandBets.splice(activeHandIndex, 1, currentHandBet, currentHandBet)
-
-    const nextCompletedHands = [...completedHands]
-    nextCompletedHands.splice(activeHandIndex, 1, false, false)
-
-    setPlayerHands(nextHands)
-    setHandBets(nextHandBets)
-    setCompletedHands(nextCompletedHands)
-    setActiveHandIndex(activeHandIndex)
-    setDeck(remainingDeck)
+    playBlackjack('split')
   }
 
   const dealerVisibleHand =
@@ -6179,9 +4659,7 @@ function App() {
                     <button
                       type="button"
                       className="balance-pill__reset"
-                      onClick={() => {
-                        setBankroll(BANKROLL)
-                      }}
+                      onClick={handleResetDevBankroll}
                     >
                       Reset
                     </button>
