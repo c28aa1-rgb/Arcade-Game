@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type SetStateAction } from 'react'
 import { createPortal } from 'react-dom'
-import { collection, deleteDoc, doc, getDoc, onSnapshot, setDoc } from 'firebase/firestore'
+import { collection, doc, getDocs, limit, onSnapshot, orderBy, query, setDoc } from 'firebase/firestore'
 import {
   developerFirestore,
   ensurePlayerSession,
@@ -1513,6 +1513,7 @@ function App() {
   const slotsResolveTimeoutRef = useRef<number | null>(null)
   const slotsSpinTokenRef = useRef(0)
   const slotsColumnStopTimeoutsRef = useRef<number[]>([])
+  const [leaderboardRemote, setLeaderboardRemote] = useState<LocalPlayerProfile[] | null>(null)
   const pendingPlinkoDropsRef = useRef<PendingPlinkoDrop[]>([])
   const plinkoLatestBalanceRef = useRef<number | null>(null)
   // one request at a time per game, so a double-click can't send two bets
@@ -1693,7 +1694,7 @@ function App() {
     )
   const selectedSettingsPlayer =
     settingsPlayers.find((profile) => profile.id === selectedSettingsPlayerId) ?? null
-  const leaderboardPlayers = [...settingsPlayers]
+  const leaderboardPlayers = [...(leaderboardRemote ?? settingsPlayers)]
     .sort((left, right) => {
       if (right.bankroll !== left.bankroll) {
         return right.bankroll - left.bankroll
@@ -1817,72 +1818,108 @@ function App() {
     playerProfile.id,
   ])
 
+  // The player list is fetched, not streamed: a live stream re-sends every
+  // balance change to every open browser, which burns through the database's
+  // free daily reads. The home screen fetches just the top 3 (all it shows)
+  // once a minute while visible; the developer's Players page fetches the
+  // whole list. Nothing is fetched while you're at a game table.
+  const showsLeaderboard = selectedGame === 'lobby'
+  const showsPlayerList = selectedGame === 'settings-players' || selectedGame === 'settings-player-detail'
+
   useEffect(() => {
     if (!isFirebaseConfigured || !firestore) {
       setSettingsPlayers(listLocalPlayerProfiles())
       return
     }
+    if (!showsLeaderboard && !showsPlayerList) {
+      return
+    }
 
     const playersCollection = collection(firestore, 'players')
-    const unsubscribe = onSnapshot(playersCollection, (snapshot) => {
-      const remotePlayers = snapshot.docs
-        .map((entry) => entry.data() as LocalPlayerProfile)
-        .map((profile) => ({
-          ...profile,
-          name: typeof profile.name === 'string' ? profile.name : '',
-          nameLocked: Boolean(profile.nameLocked),
-          skipStartScreen: Boolean(profile.skipStartScreen),
-          dailyRewardStreak: Number.isFinite(profile.dailyRewardStreak)
-            ? Math.max(0, Math.floor(profile.dailyRewardStreak))
-            : 0,
-          lastDailyRewardClaimDate:
-            typeof profile.lastDailyRewardClaimDate === 'string' ? profile.lastDailyRewardClaimDate : null,
-          bankroll: normalizeBankroll(profile.bankroll),
-        }))
+    const readProfile = (entry: { data: () => unknown }) => {
+      const profile = entry.data() as LocalPlayerProfile
+      return {
+        ...profile,
+        name: typeof profile.name === 'string' ? profile.name : '',
+        nameLocked: Boolean(profile.nameLocked),
+        skipStartScreen: Boolean(profile.skipStartScreen),
+        dailyRewardStreak: Number.isFinite(profile.dailyRewardStreak)
+          ? Math.max(0, Math.floor(profile.dailyRewardStreak))
+          : 0,
+        lastDailyRewardClaimDate:
+          typeof profile.lastDailyRewardClaimDate === 'string' ? profile.lastDailyRewardClaimDate : null,
+        bankroll: normalizeBankroll(profile.bankroll),
+      }
+    }
 
-      const localPlayers = listLocalPlayerProfiles()
-      const mergedPlayers = new Map<string, LocalPlayerProfile>()
+    // keep this browser's own name / lock in step with what the developer set
+    const adoptOwnProfile = (players: LocalPlayerProfile[]) => {
+      const currentRemoteProfile = players.find((profile) => profile.id === playerProfile.id)
+      if (currentRemoteProfile) {
+        // the balance comes straight from the server's replies, so a round's
+        // result never shows up here before its animation finishes
+        setPlayerProfile((currentProfile) => {
+          const nextProfile = { ...currentRemoteProfile, bankroll: currentProfile.bankroll }
+          writeLocalPlayerProfile(nextProfile)
+          return nextProfile
+        })
+      }
+    }
 
-      localPlayers.forEach((profile) => {
-        mergedPlayers.set(profile.id, profile)
-      })
-
-      remotePlayers.forEach((profile) => {
-        if (profile.id) {
-          mergedPlayers.set(profile.id, profile)
-        }
-      })
-
-      const allPlayers = Array.from(mergedPlayers.values())
-
-      if (allPlayers.length > 0) {
-        setSettingsPlayers(allPlayers)
-
-        const currentRemoteProfile = allPlayers.find((profile) => profile.id === playerProfile.id)
-
-        if (currentRemoteProfile) {
-          // the balance comes straight from the server's replies, so a round's
-          // result never shows up here before its animation finishes
-          setPlayerProfile((currentProfile) => {
-            const nextProfile = { ...currentRemoteProfile, bankroll: currentProfile.bankroll }
-            writeLocalPlayerProfile(nextProfile)
-            return nextProfile
-          })
-        }
-
+    let cancelled = false
+    const refresh = async () => {
+      if (document.visibilityState !== 'visible') {
         return
       }
+      try {
+        if (showsPlayerList) {
+          const snapshot = await getDocs(playersCollection)
+          if (cancelled) {
+            return
+          }
+          const merged = new Map<string, LocalPlayerProfile>()
+          listLocalPlayerProfiles().forEach((profile) => merged.set(profile.id, profile))
+          snapshot.docs.map(readProfile).forEach((profile) => {
+            if (profile.id) {
+              merged.set(profile.id, profile)
+            }
+          })
+          const allPlayers = Array.from(merged.values())
+          setSettingsPlayers(allPlayers)
+          adoptOwnProfile(allPlayers)
+          return
+        }
 
-      setSettingsPlayers(localPlayers)
-    }, (error) => {
-      console.error('Failed to subscribe to shared player profiles', error)
-      setSettingsPlayers(listLocalPlayerProfiles())
-    })
+        const snapshot = await getDocs(query(playersCollection, orderBy('bankroll', 'desc'), limit(3)))
+        if (cancelled) {
+          return
+        }
+        const topPlayers = snapshot.docs.map(readProfile).filter((profile) => profile.id)
+        setLeaderboardRemote(topPlayers)
+        adoptOwnProfile(topPlayers)
+      } catch (error) {
+        console.error('Could not load the player list', error)
+        if (showsPlayerList) {
+          setSettingsPlayers(listLocalPlayerProfiles())
+        }
+      }
+    }
+
+    void refresh()
+    const intervalId = window.setInterval(refresh, 60_000)
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        void refresh()
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibility)
 
     return () => {
-      unsubscribe()
+      cancelled = true
+      window.clearInterval(intervalId)
+      document.removeEventListener('visibilitychange', handleVisibility)
     }
-  }, [playerProfile.id])
+  }, [playerProfile.id, showsLeaderboard, showsPlayerList])
 
   useEffect(() => {
     pendingPlinkoDropsRef.current = pendingPlinkoDrops
