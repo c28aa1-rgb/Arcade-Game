@@ -1,6 +1,14 @@
 import { initializeApp } from 'firebase/app'
 import { getFirestore } from 'firebase/firestore'
-import { GoogleAuthProvider, getAuth, onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth'
+import {
+  GoogleAuthProvider,
+  getAuth,
+  onAuthStateChanged,
+  signInAnonymously,
+  signInWithPopup,
+  signOut,
+  type User,
+} from 'firebase/auth'
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -21,13 +29,52 @@ export const firebaseConfigError = isFirebaseConfigured
   ? null
   : `Missing Firebase env vars: ${missingFirebaseKeys.join(', ')}`
 
+// Two Firebase app instances on purpose:
+//  - the main one carries every visitor's silent (anonymous) session, which
+//    owns that browser's player record and poker writes
+//  - the developer one carries the Google sign-in, and only it is used for
+//    developer actions, so signing in or out of dev mode never costs you the
+//    ownership of your own player
 export const firebaseApp = isFirebaseConfigured ? initializeApp(firebaseConfig) : null
 export const firestore = firebaseApp ? getFirestore(firebaseApp) : null
+const playerAuth = firebaseApp ? getAuth(firebaseApp) : null
 
-// Developer access: a Google sign-in that only one account can pass.
+const developerApp = isFirebaseConfigured ? initializeApp(firebaseConfig, 'developer') : null
+export const developerFirestore = developerApp ? getFirestore(developerApp) : null
+const developerAuth = developerApp ? getAuth(developerApp) : null
+
+// ---------- player session ----------
+
+let playerSession: Promise<string | null> | null = null
+
+// Resolves with this browser's player uid, signing in silently the first time.
+// The uid survives reloads, so the same browser keeps owning its player.
+export const ensurePlayerSession = () => {
+  if (!playerAuth) {
+    return Promise.resolve(null)
+  }
+  if (!playerSession) {
+    playerSession = (async () => {
+      await playerAuth.authStateReady()
+      if (playerAuth.currentUser) {
+        return playerAuth.currentUser.uid
+      }
+      const credential = await signInAnonymously(playerAuth)
+      return credential.user.uid
+    })().catch((error) => {
+      console.error('Could not start a player session', error)
+      playerSession = null
+      return null
+    })
+  }
+  return playerSession
+}
+
+// ---------- developer session ----------
+
+// Developer access: a Google sign-in that only one account can pass. The
+// Firestore rules check the same address, so this isn't only a page check.
 export const DEVELOPER_EMAIL = 'c28aa1@dalton.org'
-
-export const firebaseAuth = firebaseApp ? getAuth(firebaseApp) : null
 
 export const isDeveloperUser = (user: User | null | undefined) =>
   Boolean(user && user.emailVerified && user.email?.toLowerCase() === DEVELOPER_EMAIL)
@@ -52,11 +99,12 @@ const signInErrorMessage = (error: unknown) => {
 // Resolves with the developer's email, or rejects with a message to show.
 // Anyone else who signs in is signed straight back out.
 export const signInAsDeveloper = async () => {
-  if (!firebaseAuth) {
+  if (!developerAuth) {
     throw new Error(firebaseConfigError ?? 'Firebase is not configured.')
   }
-  if (isDeveloperUser(firebaseAuth.currentUser)) {
-    return firebaseAuth.currentUser!.email!
+  await developerAuth.authStateReady()
+  if (isDeveloperUser(developerAuth.currentUser)) {
+    return developerAuth.currentUser!.email!
   }
 
   const provider = new GoogleAuthProvider()
@@ -64,29 +112,29 @@ export const signInAsDeveloper = async () => {
 
   let user: User
   try {
-    user = (await signInWithPopup(firebaseAuth, provider)).user
+    user = (await signInWithPopup(developerAuth, provider)).user
   } catch (error) {
     throw new Error(signInErrorMessage(error))
   }
 
   if (!isDeveloperUser(user)) {
     const email = user.email ?? 'that account'
-    await signOut(firebaseAuth)
+    await signOut(developerAuth)
     throw new Error(`${email} can't use developer mode. Only ${DEVELOPER_EMAIL} can.`)
   }
   return user.email!
 }
 
 export const signOutDeveloper = async () => {
-  if (firebaseAuth?.currentUser) {
-    await signOut(firebaseAuth)
+  if (developerAuth?.currentUser) {
+    await signOut(developerAuth)
   }
 }
 
 export const watchDeveloperSession = (onChange: (isDeveloper: boolean) => void) => {
-  if (!firebaseAuth) {
+  if (!developerAuth) {
     onChange(false)
     return () => {}
   }
-  return onAuthStateChanged(firebaseAuth, (user) => onChange(isDeveloperUser(user)))
+  return onAuthStateChanged(developerAuth, (user) => onChange(isDeveloperUser(user)))
 }

@@ -8645,3 +8645,49 @@ body,
   background: #ffffff;
   box-sizing: content-box;
 }
+
+/* ==========================================================================
+   Developer mode tint for the current layout: a cool blue wash over the room
+   and blue edges on the rail, panels and tiles, so it's obvious at a glance.
+   ========================================================================== */
+main.dev-mode::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 12% 0%, rgba(70, 140, 255, 0.26), transparent 46%),
+    radial-gradient(circle at 88% 6%, rgba(40, 100, 220, 0.22), transparent 42%),
+    linear-gradient(180deg, rgba(30, 70, 170, 0.16) 0%, rgba(15, 40, 110, 0.2) 100%);
+}
+
+.dev-mode .hero {
+  background:
+    linear-gradient(180deg, rgba(40, 90, 200, 0.28), rgba(20, 45, 110, 0.18)),
+    rgba(16, 10, 7, 0.78);
+  border-bottom: 1px solid rgba(120, 180, 255, 0.45);
+}
+
+.dev-mode .games-panel {
+  border-color: rgba(120, 180, 255, 0.4);
+  box-shadow:
+    0 0 0 1px rgba(99, 168, 255, 0.18),
+    0 0 60px rgba(60, 130, 255, 0.14),
+    0 24px 80px rgba(0, 0, 0, 0.45);
+}
+
+.dev-mode .home-tile {
+  border-color: rgba(120, 180, 255, 0.38);
+  box-shadow: inset 0 0 0 1px rgba(99, 168, 255, 0.12), 0 0 26px rgba(60, 130, 255, 0.12);
+}
+
+.dev-mode .home-tile:hover {
+  border-color: rgba(150, 200, 255, 0.65);
+}
+
+.dev-mode .eyebrow,
+.dev-mode .home-tile__tag,
+.dev-mode .bet-panel__label {
+  color: #9cc8ff;
+}

@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom'
 import { collection, deleteDoc, doc, getDoc, onSnapshot, setDoc } from 'firebase/firestore'
 import {
   DEVELOPER_EMAIL,
+  developerFirestore,
+  ensurePlayerSession,
   firebaseConfigError,
   firestore,
   isFirebaseConfigured,
@@ -897,6 +899,16 @@ const getPlayerProfileDocRef = (playerId: string) => {
   return doc(firestore, 'players', playerId)
 }
 
+// developer edits to other players go through the Google-signed-in session,
+// which is the only one the Firestore rules let touch someone else's record
+const getDeveloperPlayerDocRef = (playerId: string) => {
+  if (!developerFirestore) {
+    return null
+  }
+
+  return doc(developerFirestore, 'players', playerId)
+}
+
 const readLocalPlayerProfile = (playerId: string) => {
   if (typeof window === 'undefined') {
     return null
@@ -1685,6 +1697,8 @@ const writePokerRoom = async (room: PokerRoomState) => {
     return
   }
 
+  // the rules only accept poker writes from a signed-in (silent) session
+  await ensurePlayerSession()
   await setDoc(roomRef, room)
 }
 
@@ -2617,15 +2631,26 @@ function App() {
     setSettingsPlayers(listLocalPlayerProfiles())
   }
 
-  const syncRemotePlayerProfile = async (nextProfile: LocalPlayerProfile) => {
-    const profileRef = getPlayerProfileDocRef(nextProfile.id)
-
-    if (!profileRef) {
-      return
-    }
-
+  // Your own record is stamped with this browser's silent-session uid; the
+  // Firestore rules only let that uid change it. Someone else's record can only
+  // be changed by the developer session, and keeps its owner untouched.
+  const syncRemotePlayerProfile = async (nextProfile: LocalPlayerProfile, asDeveloper = false) => {
     try {
-      await setDoc(profileRef, nextProfile)
+      if (asDeveloper) {
+        const developerRef = getDeveloperPlayerDocRef(nextProfile.id)
+        if (developerRef) {
+          const { ownerUid: _ownerUid, ...fields } = nextProfile as LocalPlayerProfile & { ownerUid?: string }
+          await setDoc(developerRef, fields, { merge: true })
+        }
+        return
+      }
+
+      const profileRef = getPlayerProfileDocRef(nextProfile.id)
+      const ownerUid = profileRef ? await ensurePlayerSession() : null
+      if (!profileRef || !ownerUid) {
+        return
+      }
+      await setDoc(profileRef, { ...nextProfile, ownerUid })
     } catch (error) {
       console.error('Failed to sync player profile', error)
     }
@@ -2634,7 +2659,7 @@ function App() {
   const persistLocalPlayerProfile = (nextProfile: LocalPlayerProfile) => {
     writeLocalPlayerProfile(nextProfile)
     syncSettingsPlayers()
-    void syncRemotePlayerProfile(nextProfile)
+    void syncRemotePlayerProfile(nextProfile, nextProfile.id !== playerProfile.id)
 
     if (nextProfile.id === playerProfile.id) {
       setPlayerProfile(nextProfile)
@@ -3104,6 +3129,11 @@ function App() {
       setDevModeVerifying(false)
     }
   }
+
+  // start this browser's silent player session early, so saves are ready
+  useEffect(() => {
+    void ensurePlayerSession()
+  }, [])
 
   // a remembered dev session only counts while that Google account is signed in
   useEffect(() => watchDeveloperSession((isDeveloper) => {
@@ -4298,7 +4328,7 @@ function App() {
     deleteLocalPlayerProfile(selectedSettingsPlayer.id)
     clearPendingCashout(selectedSettingsPlayer.id)
 
-    const profileRef = getPlayerProfileDocRef(selectedSettingsPlayer.id)
+    const profileRef = getDeveloperPlayerDocRef(selectedSettingsPlayer.id)
 
     if (profileRef) {
       try {

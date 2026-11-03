@@ -1,15 +1,52 @@
 rules_version = '2';
 
-// The casino has no sign-in, so these stay open, but only for the two
-// collections the app actually uses. Everything else is denied.
+// Every visitor has a silent (anonymous) Firebase session. A player record is
+// stamped with the uid of the browser that owns it, and only that uid can
+// change it. The developer (a verified Google sign-in as c28aa1@dalton.org) can
+// edit or delete anyone. Anything not listed here is denied.
 service cloud.firestore {
   match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isDeveloper() {
+      return request.auth != null
+        && request.auth.token.email == 'c28aa1@dalton.org'
+        && request.auth.token.email_verified == true
+        && request.auth.token.firebase.sign_in_provider == 'google.com';
+    }
+
+    function validBankroll() {
+      return request.resource.data.bankroll is number
+        && request.resource.data.bankroll >= 0
+        && request.resource.data.bankroll <= 100000000;
+    }
+
+    function ownsNewData() {
+      return request.resource.data.ownerUid == request.auth.uid;
+    }
+
     match /players/{playerId} {
-      allow read, write: if true;
+      // the leaderboard is public
+      allow read: if true;
+
+      allow create: if isDeveloper()
+        || (signedIn() && ownsNewData() && validBankroll());
+
+      // records from before ownership existed are claimed by the first browser
+      // that saves them; after that only the owner (or the developer) can write
+      allow update: if isDeveloper()
+        || (signedIn() && ownsNewData() && validBankroll()
+            && resource.data.get('ownerUid', request.auth.uid) == request.auth.uid);
+
+      allow delete: if isDeveloper();
     }
 
     match /pokerRooms/{roomCode} {
-      allow read, write: if true;
+      allow read: if true;
+      allow create, update: if signedIn();
+      allow delete: if isDeveloper();
     }
   }
 }
