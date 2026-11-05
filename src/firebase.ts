@@ -1,14 +1,14 @@
 import { initializeApp } from 'firebase/app'
-import { getFirestore } from 'firebase/firestore'
-import {
-  GoogleAuthProvider,
-  getAuth,
-  onAuthStateChanged,
-  signInAnonymously,
-  signInWithPopup,
-  signOut,
-  type User,
-} from 'firebase/auth'
+import type { Firestore } from 'firebase/firestore'
+import type { Auth, User } from 'firebase/auth'
+
+// Firebase's sign-in and database libraries are most of the site's download
+// (about 320 KB of 800 KB), so they load in the background the first time
+// they're needed instead of holding up the first screen.
+let authSdk: Promise<typeof import('firebase/auth')> | null = null
+let firestoreSdk: Promise<typeof import('firebase/firestore')> | null = null
+export const loadAuthSdk = () => (authSdk ??= import('firebase/auth'))
+export const loadFirestoreSdk = () => (firestoreSdk ??= import('firebase/firestore'))
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -36,12 +36,28 @@ export const firebaseConfigError = isFirebaseConfigured
 //    developer actions, so signing in or out of dev mode never costs you the
 //    ownership of your own player
 export const firebaseApp = isFirebaseConfigured ? initializeApp(firebaseConfig) : null
-export const firestore = firebaseApp ? getFirestore(firebaseApp) : null
-const playerAuth = firebaseApp ? getAuth(firebaseApp) : null
-
 const developerApp = isFirebaseConfigured ? initializeApp(firebaseConfig, 'developer') : null
-export const developerFirestore = developerApp ? getFirestore(developerApp) : null
-const developerAuth = developerApp ? getAuth(developerApp) : null
+
+const getPlayerAuth = async (): Promise<Auth | null> => (firebaseApp ? (await loadAuthSdk()).getAuth(firebaseApp) : null)
+const getDeveloperAuth = async (): Promise<Auth | null> =>
+  developerApp ? (await loadAuthSdk()).getAuth(developerApp) : null
+
+// Auth is set up first so the database sends that session with every request.
+export const getPlayerDb = async (): Promise<Firestore | null> => {
+  if (!firebaseApp) {
+    return null
+  }
+  await getPlayerAuth()
+  return (await loadFirestoreSdk()).getFirestore(firebaseApp)
+}
+
+export const getDeveloperDb = async (): Promise<Firestore | null> => {
+  if (!developerApp) {
+    return null
+  }
+  await getDeveloperAuth()
+  return (await loadFirestoreSdk()).getFirestore(developerApp)
+}
 
 // ---------- player session ----------
 
@@ -50,16 +66,17 @@ let playerSession: Promise<string | null> | null = null
 // Resolves with this browser's player uid, signing in silently the first time.
 // The uid survives reloads, so the same browser keeps owning its player.
 export const ensurePlayerSession = () => {
-  if (!playerAuth) {
+  if (!firebaseApp) {
     return Promise.resolve(null)
   }
   if (!playerSession) {
     playerSession = (async () => {
+      const playerAuth = (await getPlayerAuth())!
       await playerAuth.authStateReady()
       if (playerAuth.currentUser) {
         return playerAuth.currentUser.uid
       }
-      const credential = await signInAnonymously(playerAuth)
+      const credential = await (await loadAuthSdk()).signInAnonymously(playerAuth)
       return credential.user.uid
     })().catch((error) => {
       console.error('Could not start a player session', error)
@@ -73,6 +90,7 @@ export const ensurePlayerSession = () => {
 // The signed proof of this browser's session that the game server checks.
 export const getPlayerIdToken = async () => {
   const uid = await ensurePlayerSession()
+  const playerAuth = await getPlayerAuth()
   return uid && playerAuth?.currentUser ? playerAuth.currentUser.getIdToken() : null
 }
 
@@ -105,9 +123,11 @@ const signInErrorMessage = (error: unknown) => {
 // Resolves with the developer's email, or rejects with a message to show.
 // Anyone else who signs in is signed straight back out.
 export const signInAsDeveloper = async () => {
+  const developerAuth = await getDeveloperAuth()
   if (!developerAuth) {
     throw new Error(firebaseConfigError ?? 'Firebase is not configured.')
   }
+  const { GoogleAuthProvider, signInWithPopup, signOut } = await loadAuthSdk()
   await developerAuth.authStateReady()
   if (isDeveloperUser(developerAuth.currentUser)) {
     return developerAuth.currentUser!.email!
@@ -132,14 +152,16 @@ export const signInAsDeveloper = async () => {
 }
 
 export const signOutDeveloper = async () => {
+  const developerAuth = await getDeveloperAuth()
   if (developerAuth?.currentUser) {
-    await signOut(developerAuth)
+    await (await loadAuthSdk()).signOut(developerAuth)
   }
 }
 
 // Sent alongside player requests so the server can show developer extras
 // (mine positions, the next hi-lo card, everyone's poker hands).
 export const getDeveloperIdToken = async () => {
+  const developerAuth = await getDeveloperAuth()
   if (!developerAuth) {
     return null
   }
@@ -148,9 +170,21 @@ export const getDeveloperIdToken = async () => {
 }
 
 export const watchDeveloperSession = (onChange: (isDeveloper: boolean) => void) => {
-  if (!developerAuth) {
+  if (!developerApp) {
     onChange(false)
     return () => {}
   }
-  return onAuthStateChanged(developerAuth, (user) => onChange(isDeveloperUser(user)))
+  let stopped = false
+  let unsubscribe = () => {}
+  void (async () => {
+    const developerAuth = (await getDeveloperAuth())!
+    const { onAuthStateChanged } = await loadAuthSdk()
+    if (!stopped) {
+      unsubscribe = onAuthStateChanged(developerAuth, (user) => onChange(isDeveloperUser(user)))
+    }
+  })()
+  return () => {
+    stopped = true
+    unsubscribe()
+  }
 }

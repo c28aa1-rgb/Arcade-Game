@@ -1,16 +1,14 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type SetStateAction } from 'react'
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type SetStateAction } from 'react'
 import { createPortal } from 'react-dom'
-import { collection, doc, getDocs, limit, onSnapshot, orderBy, query, setDoc } from 'firebase/firestore'
 import {
-  developerFirestore,
   ensurePlayerSession,
   firebaseConfigError,
-  firestore,
   isFirebaseConfigured,
   signInAsDeveloper,
   signOutDeveloper,
   watchDeveloperSession,
 } from './firebase'
+import { loadPlayers, savePlayerProfile, watchCollection, watchDocument } from './database'
 import { CasinoError, casinoCall, type CasinoResponse } from './casinoApi'
 import {
   BANKROLL,
@@ -72,13 +70,17 @@ import {
   type PokerSeat,
   type PokerStreet,
 } from './shared/poker'
-import PlinkoBoard from './components/PlinkoBoard'
-import ChickenRoad, { type ChickenStatus } from './components/ChickenRoad'
+import type { ChickenStatus } from './components/ChickenRoad'
 import CardFace from './components/CardFace'
 import { GemIcon, MineIcon } from './components/MinesIcons'
 import SlotSymbol from './components/SlotSymbol'
 import RouletteWheel from './components/RouletteWheel'
-import JetstreamBoard, { type JetstreamStatus } from './components/JetstreamBoard'
+import type { JetstreamStatus } from './components/JetstreamBoard'
+
+// The three biggest game boards download when their game is first opened.
+const PlinkoBoard = lazy(() => import('./components/PlinkoBoard'))
+const ChickenRoad = lazy(() => import('./components/ChickenRoad'))
+const JetstreamBoard = lazy(() => import('./components/JetstreamBoard'))
 import {
   formatMultiplier as formatJetMultiplier,
   generateFlight as generateJetFlight,
@@ -700,24 +702,6 @@ const getPendingCashoutStorageKey = (playerId: string) =>
 const getPlayerDailyStatsStorageKey = (playerId: string) =>
   `${PLAYER_DAILY_STATS_STORAGE_PREFIX}${playerId}`
 
-const getPlayerProfileDocRef = (playerId: string) => {
-  if (!firestore) {
-    return null
-  }
-
-  return doc(firestore, 'players', playerId)
-}
-
-// developer edits to other players go through the Google-signed-in session,
-// which is the only one the Firestore rules let touch someone else's record
-const getDeveloperPlayerDocRef = (playerId: string) => {
-  if (!developerFirestore) {
-    return null
-  }
-
-  return doc(developerFirestore, 'players', playerId)
-}
-
 const readLocalPlayerProfile = (playerId: string) => {
   if (typeof window === 'undefined') {
     return null
@@ -1202,8 +1186,6 @@ const CasinoStatisticsChart = ({ stats }: { stats: CasinoDailyStat[] }) => {
   )
 }
 
-const getPokerRoomDocRef = (code: string) => (firestore ? doc(firestore, 'pokerRooms', code) : null)
-
 // The server keeps the mines; the page starts from a blank field. A developer
 // gets the mine positions so the field can show them.
 const createMinesBoard = (mineIds: number[] = []): MinesTile[] =>
@@ -1605,19 +1587,15 @@ function App() {
     } = nextProfile as LocalPlayerProfile & { ownerUid?: string }
     try {
       if (asDeveloper) {
-        const developerRef = getDeveloperPlayerDocRef(nextProfile.id)
-        if (developerRef) {
-          await setDoc(developerRef, fields, { merge: true })
-        }
+        await savePlayerProfile(nextProfile.id, fields, true)
         return
       }
 
-      const profileRef = getPlayerProfileDocRef(nextProfile.id)
-      const ownerUid = profileRef ? await ensurePlayerSession() : null
-      if (!profileRef || !ownerUid) {
+      const ownerUid = isFirebaseConfigured ? await ensurePlayerSession() : null
+      if (!ownerUid) {
         return
       }
-      await setDoc(profileRef, { ...fields, ownerUid }, { merge: true })
+      await savePlayerProfile(nextProfile.id, { ...fields, ownerUid }, false)
     } catch (error) {
       console.error('Failed to sync player profile', error)
     }
@@ -1841,7 +1819,7 @@ function App() {
   const showsPlayerList = selectedGame === 'settings-players' || selectedGame === 'settings-player-detail'
 
   useEffect(() => {
-    if (!isFirebaseConfigured || !firestore) {
+    if (!isFirebaseConfigured) {
       setSettingsPlayers(listLocalPlayerProfiles())
       return
     }
@@ -1849,9 +1827,8 @@ function App() {
       return
     }
 
-    const playersCollection = collection(firestore, 'players')
-    const readProfile = (entry: { data: () => unknown }) => {
-      const profile = entry.data() as LocalPlayerProfile
+    const readProfile = (data: unknown) => {
+      const profile = data as LocalPlayerProfile
       return {
         ...profile,
         name: typeof profile.name === 'string' ? profile.name : '',
@@ -1887,13 +1864,13 @@ function App() {
       }
       try {
         if (showsPlayerList) {
-          const snapshot = await getDocs(playersCollection)
+          const records = await loadPlayers()
           if (cancelled) {
             return
           }
           const merged = new Map<string, LocalPlayerProfile>()
           listLocalPlayerProfiles().forEach((profile) => merged.set(profile.id, profile))
-          snapshot.docs.map(readProfile).forEach((profile) => {
+          records.map(readProfile).forEach((profile) => {
             if (profile.id) {
               merged.set(profile.id, profile)
             }
@@ -1904,11 +1881,11 @@ function App() {
           return
         }
 
-        const snapshot = await getDocs(query(playersCollection, orderBy('bankroll', 'desc'), limit(3)))
+        const records = await loadPlayers(3)
         if (cancelled) {
           return
         }
-        const topPlayers = snapshot.docs.map(readProfile).filter((profile) => profile.id)
+        const topPlayers = records.map(readProfile).filter((profile) => profile.id)
         setLeaderboardRemote(topPlayers)
         adoptOwnProfile(topPlayers)
       } catch (error) {
@@ -2237,15 +2214,23 @@ function App() {
       return
     }
 
-    const roomRef = getPokerRoomDocRef(pokerRoomCode)
-
-    if (!roomRef) {
+    if (!isFirebaseConfigured) {
       setPokerMessage(firebaseConfigError ?? 'Firebase is not configured.')
       return
     }
 
-    const unsubscribe = onSnapshot(roomRef, (roomSnapshot) => {
-      if (!roomSnapshot.exists()) {
+    // Right after a table is created or joined, the first update can arrive
+    // before the server has written the table, so "missing" only means
+    // "closed" once this browser has seen the table exist.
+    let roomSeen = false
+    const unsubscribe = watchDocument(['pokerRooms', pokerRoomCode], (roomData) => {
+      if (roomData) {
+        roomSeen = true
+      }
+      if (!roomData && !roomSeen) {
+        return
+      }
+      if (!roomData) {
         setPokerScreen('entry')
         setPokerMode('choose')
         setPokerRoomCode('')
@@ -2264,52 +2249,48 @@ function App() {
         return
       }
 
-      applyPokerRoom(roomSnapshot.data() as PokerRoomState)
+      applyPokerRoom(roomData as unknown as PokerRoomState)
     })
 
     // this browser's own two cards (the table document never carries them)
-    const handRef = firestore ? doc(firestore, 'pokerRooms', pokerRoomCode, 'hands', pokerPlayerId) : null
-    const unsubscribeHand = handRef
-      ? onSnapshot(
-          handRef,
-          (handSnapshot) => {
-            const hand = handSnapshot.data() as { handId?: number; cards?: Card[] } | undefined
-            if (hand?.cards) {
-              pokerHandsRef.current = {
-                ...pokerHandsRef.current,
-                [pokerPlayerId]: { handId: hand.handId ?? 0, cards: hand.cards },
-              }
-              if (pokerPublicRoomRef.current) {
-                applyPokerRoom(pokerPublicRoomRef.current)
-              }
-            }
-          },
-          () => undefined,
-        )
-      : () => undefined
+    const unsubscribeHand = watchDocument(
+      ['pokerRooms', pokerRoomCode, 'hands', pokerPlayerId],
+      (handData) => {
+        const hand = handData as { handId?: number; cards?: Card[] } | null
+        if (hand?.cards) {
+          pokerHandsRef.current = {
+            ...pokerHandsRef.current,
+            [pokerPlayerId]: { handId: hand.handId ?? 0, cards: hand.cards },
+          }
+          if (pokerPublicRoomRef.current) {
+            applyPokerRoom(pokerPublicRoomRef.current)
+          }
+        }
+      },
+      { onError: () => undefined },
+    )
 
     // a developer sees every hand
-    const unsubscribeAllHands =
-      devMode && developerFirestore
-        ? onSnapshot(
-            collection(developerFirestore, 'pokerRooms', pokerRoomCode, 'hands'),
-            (handsSnapshot) => {
-              handsSnapshot.docs.forEach((entry) => {
-                const hand = entry.data() as { handId?: number; cards?: Card[] }
-                if (hand.cards) {
-                  pokerHandsRef.current = {
-                    ...pokerHandsRef.current,
-                    [entry.id]: { handId: hand.handId ?? 0, cards: hand.cards },
-                  }
+    const unsubscribeAllHands = devMode
+      ? watchCollection(
+          ['pokerRooms', pokerRoomCode, 'hands'],
+          (handDocs) => {
+            handDocs.forEach((entry) => {
+              const hand = entry.data as { handId?: number; cards?: Card[] }
+              if (hand.cards) {
+                pokerHandsRef.current = {
+                  ...pokerHandsRef.current,
+                  [entry.id]: { handId: hand.handId ?? 0, cards: hand.cards },
                 }
-              })
-              if (pokerPublicRoomRef.current) {
-                applyPokerRoom(pokerPublicRoomRef.current)
               }
-            },
-            () => undefined,
-          )
-        : () => undefined
+            })
+            if (pokerPublicRoomRef.current) {
+              applyPokerRoom(pokerPublicRoomRef.current)
+            }
+          },
+          { asDeveloper: true, onError: () => undefined },
+        )
+      : () => undefined
 
     return () => {
       unsubscribe()
@@ -5926,12 +5907,14 @@ function App() {
             createPortal(
               <div className="jet-fs" style={{ top: `${fullscreenTopOffset}px` }}>
                 <div className="jet-fs__scene">
-                  <JetstreamBoard
-                    status={jetstreamStatus}
-                    flight={jetstreamFlight}
-                    bet={jetstreamStatus === 'idle' ? bet : jetstreamBet}
-                    onFinish={handleJetstreamFinish}
-                  />
+                  <Suspense fallback={null}>
+                    <JetstreamBoard
+                      status={jetstreamStatus}
+                      flight={jetstreamFlight}
+                      bet={jetstreamStatus === 'idle' ? bet : jetstreamBet}
+                      onFinish={handleJetstreamFinish}
+                    />
+                  </Suspense>
 
                   <p className="jet-fs__status" role="status">{jetstreamMessage}</p>
 
@@ -6035,13 +6018,15 @@ function App() {
             createPortal(
               <div className="chicken-fs" style={{ top: `${fullscreenTopOffset}px` }}>
                 <div className="chicken-fs__scene">
-                  <ChickenRoad
-                    multipliers={getChickenConfig(chickenDifficulty).multipliers}
-                    currentLane={chickenLane}
-                    status={chickenStatus}
-                    deathLane={chickenDeathLane}
-                    difficulty={chickenDifficulty}
-                  />
+                  <Suspense fallback={null}>
+                    <ChickenRoad
+                      multipliers={getChickenConfig(chickenDifficulty).multipliers}
+                      currentLane={chickenLane}
+                      status={chickenStatus}
+                      deathLane={chickenDeathLane}
+                      difficulty={chickenDifficulty}
+                    />
+                  </Suspense>
 
                   <div className="chicken-fs__hud">
                     <span className="chicken-fs__eyebrow">
@@ -6165,12 +6150,14 @@ function App() {
                   </div>
                 </div>
 
-                <PlinkoBoard
-                  rows={PLINKO_ROWS}
-                  multipliers={PLINKO_MULTIPLIERS}
-                  pendingDrops={pendingPlinkoDrops}
-                  onBallSettled={handleSettlePlinkoDrop}
-                />
+                <Suspense fallback={null}>
+                  <PlinkoBoard
+                    rows={PLINKO_ROWS}
+                    multipliers={PLINKO_MULTIPLIERS}
+                    pendingDrops={pendingPlinkoDrops}
+                    onBallSettled={handleSettlePlinkoDrop}
+                  />
+                </Suspense>
               </div>
 
               <div className="roulette-panel">

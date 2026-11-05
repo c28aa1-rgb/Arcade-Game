@@ -190,9 +190,19 @@ export class PlayerVault extends DurableObject<Env> {
           },
         },
       ])
+      // (a read is far cheaper than a write, so only clear it when it's set)
+      if (await this.ctx.storage.get<number>('syncFailures')) {
+        await this.ctx.storage.delete('syncFailures')
+      }
     } catch (error) {
-      console.error('leaderboard sync failed; retrying', error)
-      await this.ctx.storage.setAlarm(Date.now() + 60_000)
+      // Back off 1, 2, 4 … up to 60 minutes. If Firebase's daily write
+      // allowance has run out, retrying every minute until it resets would
+      // quietly burn through Cloudflare's daily request allowance too.
+      const failures = ((await this.ctx.storage.get<number>('syncFailures')) ?? 0) + 1
+      await this.ctx.storage.put('syncFailures', failures)
+      const delayMinutes = Math.min(60, 2 ** (failures - 1))
+      console.error(`leaderboard sync failed (${failures} in a row); retrying in ${delayMinutes} min`, error)
+      await this.ctx.storage.setAlarm(Date.now() + delayMinutes * 60_000)
     }
   }
 

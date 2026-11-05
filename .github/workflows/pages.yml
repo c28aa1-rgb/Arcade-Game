@@ -24,6 +24,8 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      # the odds and rules checks: a change that breaks a game's math never ships
+      - run: npm test
       - run: npm run build
         env:
           PAGES_BASE: /${{ github.event.repository.name }}/

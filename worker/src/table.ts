@@ -54,6 +54,11 @@ export class PokerTable extends DurableObject<Env> {
       this.room = (await this.ctx.storage.get<PokerRoomState>('room')) ?? null
       this.owners = (await this.ctx.storage.get<Record<string, string>>('owners')) ?? {}
       this.loaded = true
+      // every table saved since idle-closing existed has a close timer; one
+      // without (made before that) is a leftover, so close it in a minute
+      if (this.room && (await this.ctx.storage.getAlarm()) === null) {
+        await this.ctx.storage.setAlarm(Date.now() + 60_000)
+      }
     }
   }
 
