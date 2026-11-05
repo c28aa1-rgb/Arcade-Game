@@ -17,7 +17,9 @@ import {
   type Card,
   DEFAULT_MINES_COUNT,
   DICE_COUNT,
+  BLACKJACK_MAX_HANDS,
   DICE_MAX_TOTAL,
+  DICE_MAX_WIN_CHANCE,
   DICE_MIN_TOTAL,
   type DiceMode,
   getDailyRewardAmountForDay,
@@ -1642,8 +1644,10 @@ function App() {
     isHandActive &&
     currentHand.length === 2 &&
     currentHand[0]?.rank === currentHand[1]?.rank &&
+    playerHands.length < BLACKJACK_MAX_HANDS &&
     bankroll >= currentHandBet
-  const canDouble = isHandActive && bankroll >= currentHandBet
+  // doubling is only allowed on a hand's first two cards
+  const canDouble = isHandActive && currentHand.length === 2 && bankroll >= currentHandBet
   const minesMultiplier = getMinesMultiplier(minesSafePicks, minesCount)
   const minesCashOutAmount = minesSafePicks > 0 ? Math.round(bet * minesMultiplier) : 0
   const minesSafeTiles = MINES_TILE_COUNT - minesCount
@@ -5628,7 +5632,11 @@ function App() {
                   <span>
                     {diceResult
                       ? `Net ${formatSignedPoints(diceResult.delta)}`
-                      : `${Math.min(99.9, Math.round(diceWinChance * 1000) / 10)}% to score at x${diceMultiplier.toFixed(2)}`}
+                      : diceMultiplier <= 0
+                        ? diceWinChance > DICE_MAX_WIN_CHANCE
+                          ? `Wins ${Math.min(99.9, Math.round(diceWinChance * 1000) / 10)}% of the time, which is too safe to pay. Keep it at ${DICE_MAX_WIN_CHANCE * 100}% or less.`
+                          : 'That line can never win. Move it.'
+                        : `${Math.min(99.9, Math.round(diceWinChance * 1000) / 10)}% to score at x${diceMultiplier.toFixed(2)}`}
                   </span>
                 </div>
               </div>
@@ -5686,9 +5694,9 @@ function App() {
                     type="button"
                     className="action-button action-button--primary roulette-stage__spin dice-roll-button"
                     onClick={handleRollDice}
-                    disabled={diceRolling || !canPlaceBets || bet > bankroll}
+                    disabled={diceRolling || !canPlaceBets || bet > bankroll || diceMultiplier <= 0}
                   >
-                    {diceRolling ? 'Rolling...' : 'Roll 20 Dice'}
+                    {diceRolling ? 'Rolling...' : diceMultiplier <= 0 ? 'Move the line to bet' : 'Roll 20 Dice'}
                   </button>
                 </div>
               </div>

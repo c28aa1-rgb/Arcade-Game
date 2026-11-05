@@ -49,7 +49,9 @@ export const DEFAULT_MINES_COUNT = 5
 export const MINES_EDGE = 0.99
 export const HILO_HOUSE_EDGE = 0.99
 export const PLINKO_ROWS = 12
-export const PLINKO_MULTIPLIERS = [24, 7.5, 3.8, 1.4, 0.8, 0.6, 0.35, 0.6, 0.8, 1.4, 3.8, 7.5, 24]
+// The standard 12-row "medium risk" table (Stake's): 99% return when every
+// peg is a fair 50/50 bounce, which the physics reproduces.
+export const PLINKO_MULTIPLIERS = [33, 11, 4, 2, 1.1, 0.6, 0.3, 0.6, 1.1, 2, 4, 11, 33]
 export const SLOT_ROWS = 3
 export const SLOT_COLUMNS = 5
 export const SUITS = ['♠', '♥', '♦', '♣']
@@ -57,6 +59,9 @@ export const RANKS = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q
 
 export const normalizeBankroll = (value: number) => Math.max(0, Math.round(value))
 export const roundMoney = (value: number) => Number(value.toFixed(2))
+// Multipliers are always rounded DOWN to the cent, so rounding can only ever
+// favour the house, never push a game above its advertised return.
+export const floorMultiplier = (value: number) => Math.floor(value * 100 + 1e-9) / 100
 
 // ---------- cards ----------
 
@@ -141,6 +146,36 @@ export const removeCardFromDeck = (currentDeck: Card[], targetCard: Card) => {
 }
 
 // ---------- blackjack ----------
+//
+// Standard Las Vegas rules: 6-deck shoe reshuffled once three-quarters has been
+// dealt, dealer stands on all 17s, blackjack pays 3 to 2, the dealer checks for
+// blackjack before you act, double on your first two cards (also after a
+// split), split up to 4 hands, split aces get one card each. With basic
+// strategy the house edge is about 0.4%.
+
+export const BLACKJACK_DECKS = 6
+export const BLACKJACK_RESHUFFLE_AT = 78 // cards left (a quarter of the shoe)
+export const BLACKJACK_MAX_HANDS = 4
+
+export const createBlackjackShoe = () => {
+  const shoe: Card[] = []
+  for (let deck = 0; deck < BLACKJACK_DECKS; deck += 1) {
+    for (const suit of SUITS) {
+      for (const rank of RANKS) {
+        shoe.push({ rank, suit })
+      }
+    }
+  }
+  for (let index = shoe.length - 1; index > 0; index -= 1) {
+    const swapIndex = randomInt(index + 1)
+    ;[shoe[index], shoe[swapIndex]] = [shoe[swapIndex], shoe[index]]
+  }
+  return shoe
+}
+
+// Only the two-card 21 from the deal counts; 21 after a split does not.
+export const isBlackjackNatural = (hand: Card[], handCount = 1) =>
+  handCount === 1 && hand.length === 2 && getHandValue(hand) === 21
 
 export const finishDealerHand = (startingHand: Card[], currentDeck: Card[]) => {
   let dealerCards = [...startingHand]
@@ -159,6 +194,22 @@ export const getRoundResult = (playerHands: Card[][], dealer: Card[], handBets: 
   const dealerTotal = getHandValue(dealer)
   const summaries: string[] = []
   let payout = 0
+  const dealerNatural = isBlackjackNatural(dealer)
+  const playerNatural = isBlackjackNatural(playerHands[0] ?? [], playerHands.length)
+
+  if (playerNatural || dealerNatural) {
+    const wager = handBets[0]
+    if (playerNatural && dealerNatural) {
+      summaries.push('Both have blackjack. Push.')
+      payout += wager
+    } else if (playerNatural) {
+      summaries.push('Blackjack! Pays 3 to 2.')
+      payout += wager * 2.5
+    } else {
+      summaries.push('Dealer has blackjack.')
+    }
+    return { message: summaries.join(' '), delta: payout - wager, payout }
+  }
 
   playerHands.forEach((hand, index) => {
     const playerTotal = getHandValue(hand)
@@ -262,10 +313,17 @@ export const getHiLoOdds = (deckCards: Card[], currentCard: Card | null): HiLoOd
     equalCount,
     higherProbability,
     lowerProbability,
-    higherStepMultiplier: higherProbability > 0 ? Number((HILO_HOUSE_EDGE / higherProbability).toFixed(2)) : 0,
-    lowerStepMultiplier: lowerProbability > 0 ? Number((HILO_HOUSE_EDGE / lowerProbability).toFixed(2)) : 0,
+    higherStepMultiplier: getHiLoStepMultiplier(higherProbability, equalCount / deckCards.length),
+    lowerStepMultiplier: getHiLoStepMultiplier(lowerProbability, equalCount / deckCards.length),
   }
 }
+
+// A tie is a push (the card is replaced and your stake keeps riding), so it is
+// worth 1x. The win multiplier is priced so one guess returns exactly 99%:
+//   P(win) × m + P(tie) × 1 = 0.99   →   m = (0.99 − P(tie)) / P(win)
+// Pricing it as 0.99 / P(win) (ignoring ties) would return ~105% per guess.
+export const getHiLoStepMultiplier = (winProbability: number, tieProbability: number) =>
+  winProbability > 0 ? floorMultiplier((HILO_HOUSE_EDGE - tieProbability) / winProbability) : 0
 
 // ---------- mines ----------
 
@@ -299,7 +357,7 @@ export const getMinesMultiplier = (safePickCount: number, mineCount: number) => 
     multiplier *= remainingTiles / remainingSafeTiles
   }
 
-  return Number(multiplier.toFixed(2))
+  return floorMultiplier(multiplier)
 }
 
 // ---------- dice ----------
@@ -333,6 +391,10 @@ const DICE_TOTAL_OUTCOMES = 6 ** DICE_COUNT
 // ~2x and the edge is constant across the whole target range.
 const DICE_HOUSE_EDGE = 0.01
 const DICE_MIN_MULTIPLIER = 1.01
+// Like Stake, a bet can win at most 98% of the time. Above that the fair
+// multiplier drops under the 1.01x minimum, and paying 1.01x on a near-certain
+// win would hand the player an edge (101% return on "over 20").
+export const DICE_MAX_WIN_CHANCE = 0.98
 
 export const clampDiceTarget = (value: number) => Math.min(DICE_MAX_TOTAL, Math.max(DICE_MIN_TOTAL, Math.round(value)))
 
@@ -360,13 +422,12 @@ export const getDiceWinChance = (target: number, mode: DiceMode) => {
 export const getDiceMultiplier = (target: number, mode: DiceMode) => {
   const winChance = getDiceWinChance(target, mode)
 
-  if (winChance <= 0) {
+  if (winChance <= 0 || winChance > DICE_MAX_WIN_CHANCE) {
     return 0
   }
 
   const fairMultiplier = (1 - DICE_HOUSE_EDGE) / winChance
-  const clamped = Math.min(DICE_MAX_MULTIPLIER, Math.max(DICE_MIN_MULTIPLIER, fairMultiplier))
-  return Number(clamped.toFixed(2))
+  return Math.min(DICE_MAX_MULTIPLIER, Math.max(DICE_MIN_MULTIPLIER, floorMultiplier(fairMultiplier)))
 }
 
 // ---------- roulette ----------
@@ -509,13 +570,23 @@ export const settleRouletteBets = (
 
 // ---------- slots ----------
 
+// Tuned like a real hold-and-spin machine (~96% return): line wins give back
+// about 63%, the orb bonus about 33%. The bonus starts roughly once every 175
+// spins and fills the whole screen (the grand) about once every 80,000.
+// Re-check with a simulation after changing any of these numbers.
 export const SLOT_PAYTABLE: Record<SlotRegularSymbol, { 3: number; 4: number; 5: number }> = {
-  dragon: { 3: 8, 4: 20, 5: 60 },
-  crown: { 3: 5, 4: 12, 5: 30 },
-  gem: { 3: 4, 4: 10, 5: 22 },
-  lotus: { 3: 3, 4: 8, 5: 18 },
-  moon: { 3: 2, 4: 6, 5: 14 },
+  dragon: { 3: 10, 4: 25, 5: 75 },
+  crown: { 3: 6, 4: 15, 5: 40 },
+  gem: { 3: 5, 4: 12, 5: 30 },
+  lotus: { 3: 4, 4: 10, 5: 22 },
+  moon: { 3: 3, 4: 7, 5: 18 },
 }
+
+// chance each cell of a spin is an orb, orbs needed to start the bonus, and the
+// chance each empty cell catches an orb on a bonus respin
+export const SLOT_ORB_CHANCE = 0.12
+export const SLOT_BONUS_TRIGGER = 6
+export const SLOT_RESPIN_ORB_CHANCE = 0.045
 
 export const SLOT_SYMBOL_LABELS: Record<SlotRegularSymbol, string> = {
   dragon: 'DR',
@@ -573,7 +644,7 @@ export const getRandomSlotOrb = (betAmount: number): SlotCell => {
 
 const createSlotsSpinTopRow = (betAmount: number): SlotCell[] =>
   Array.from({ length: SLOT_COLUMNS }, () =>
-    random() < 0.24 ? getRandomSlotOrb(betAmount) : { kind: 'symbol' as const, symbol: getRandomSlotSymbol() },
+    random() < SLOT_ORB_CHANCE ? getRandomSlotOrb(betAmount) : { kind: 'symbol' as const, symbol: getRandomSlotSymbol() },
   )
 
 export const createSlotsFinalGrid = (betAmount: number): SlotCell[][] =>
@@ -668,17 +739,11 @@ export const respinSlotsBonusGrid = (
   let newOrbCount = 0
 
   emptySpots.forEach(({ rowIndex, columnIndex }) => {
-    if (random() < 0.16) {
+    if (random() < SLOT_RESPIN_ORB_CHANCE) {
       nextGrid[rowIndex][columnIndex] = getRandomSlotOrb(betAmount)
       newOrbCount += 1
     }
   })
-
-  if (newOrbCount === 0 && emptySpots.length > 0 && random() < 0.35) {
-    const guaranteedSpot = emptySpots[randomInt(emptySpots.length)]
-    nextGrid[guaranteedSpot.rowIndex][guaranteedSpot.columnIndex] = getRandomSlotOrb(betAmount)
-    newOrbCount = 1
-  }
 
   return { nextGrid, newOrbCount }
 }
@@ -724,24 +789,6 @@ export const calculateSlotsBonusPayout = (bonusGrid: (SlotCell | null)[][], betA
   }
 
   return { totalPayout, orbValueTotal, miniCount, minorCount, majorCount, hitGrand }
-}
-
-// ---------- plinko ----------
-
-export const getPlinkoCenterBiasForWinStreak = (winStreak: number) => {
-  if (winStreak < 2) {
-    return 0
-  }
-
-  if (winStreak === 2) {
-    return 0.1
-  }
-
-  if (winStreak === 3) {
-    return 0.16
-  }
-
-  return 0.22
 }
 
 // ---------- daily bonus ----------

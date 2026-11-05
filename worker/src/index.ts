@@ -42,7 +42,7 @@ const PLAYER_ROUTES: Record<string, GameCall> = {
   'player/me': (vault, caller) => vault.me(caller),
   'player/leave': (vault, caller, body) =>
     vault.leaveGame(caller, body.game as 'blackjack' | 'hilo' | 'mines' | 'chicken' | 'slots'),
-  'daily/claim': (vault, caller, body) => vault.claimDaily(caller, body.todayKey),
+  'daily/claim': (vault, caller) => vault.claimDaily(caller),
   'dice/roll': (vault, caller, body) => vault.diceRoll(caller, body as never),
   'roulette/spin': (vault, caller, body) => vault.rouletteSpin(caller, body as never),
   'slots/spin': (vault, caller, body) => vault.slotsSpin(caller, body as never),

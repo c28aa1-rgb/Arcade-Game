@@ -477,6 +477,50 @@ const settleHandChips = (players: Record<string, PokerPlayerState>, playerChips:
     ]),
   ) as Record<string, PokerPlayerState>
 
+// Splits the pot into a main pot and side pots. Each player can only win, from
+// each other player, as much as they put in themselves: someone all-in for $50
+// can win $50 from each caller, and anything bet above that is a side pot for
+// the players who covered it. A part only one player covered goes back to them.
+export const buildPokerPots = (room: PokerRoomState, showdownIds: string[]) => {
+  const game = room.game!
+  const start = room.handStartChips ?? {}
+  const contributions = Object.entries(game.players).map(([playerId, player]) => ({
+    playerId,
+    amount: Math.max(0, (start[playerId] ?? player.chips) - player.chips),
+  }))
+  const total = contributions.reduce((sum, entry) => sum + entry.amount, 0)
+
+  // without the starting stacks (a hand from before this existed) fall back to
+  // one pot for everyone still in
+  if (total !== game.pot || !room.handStartChips) {
+    return [{ amount: game.pot, eligibleIds: showdownIds }]
+  }
+
+  const levels = Array.from(
+    new Set(contributions.filter((entry) => showdownIds.includes(entry.playerId)).map((entry) => entry.amount)),
+  ).sort((left, right) => left - right)
+  const pots: { amount: number; eligibleIds: string[] }[] = []
+  let previous = 0
+
+  levels.forEach((level, index) => {
+    const isTop = index === levels.length - 1
+    // the top pot also takes anything folded players put in above every level
+    const amount = contributions.reduce(
+      (sum, entry) => sum + (isTop ? Math.max(0, entry.amount - previous) : Math.max(0, Math.min(entry.amount, level) - previous)),
+      0,
+    )
+    const eligibleIds = showdownIds.filter((playerId) =>
+      contributions.some((entry) => entry.playerId === playerId && entry.amount >= level),
+    )
+    if (amount > 0) {
+      pots.push({ amount, eligibleIds })
+    }
+    previous = level
+  })
+
+  return pots.length > 0 ? pots : [{ amount: game.pot, eligibleIds: showdownIds }]
+}
+
 const resolvePokerShowdown = (room: PokerRoomState): PokerRoomState => {
   if (!room.game) {
     return room
@@ -495,19 +539,38 @@ const resolvePokerShowdown = (room: PokerRoomState): PokerRoomState => {
     score: evaluateBestPokerHand([...game.communityCards, ...game.players[seat.id].holeCards]),
   }))
 
-  const bestScore = scores.reduce<number[]>(
-    (best, entry) => (comparePokerScores(entry.score, best) > 0 ? entry.score : best),
-    [-1],
-  )
-  const winners = scores.filter((entry) => comparePokerScores(entry.score, bestScore) === 0)
-  const splitAmount = winners.length > 0 ? Math.floor(game.pot / winners.length) : 0
-  const remainder = winners.length > 0 ? game.pot % winners.length : 0
+  const pots = buildPokerPots(room, scores.map(({ seat }) => seat.id))
   const nextPlayerChips = { ...room.playerChips }
+  const potWinners: { amount: number; winners: PokerSeat[] }[] = []
 
-  winners.forEach((winner, index) => {
-    nextPlayerChips[winner.seat.id] =
-      (nextPlayerChips[winner.seat.id] ?? room.buyIn) + splitAmount + (index === 0 ? remainder : 0)
+  pots.forEach((pot) => {
+    const contenders = scores.filter((entry) => pot.eligibleIds.includes(entry.seat.id))
+    const bestScore = contenders.reduce<number[]>(
+      (best, entry) => (comparePokerScores(entry.score, best) > 0 ? entry.score : best),
+      [-1],
+    )
+    const winners = contenders.filter((entry) => comparePokerScores(entry.score, bestScore) === 0)
+    const splitAmount = Math.floor(pot.amount / winners.length)
+    const remainder = pot.amount % winners.length
+
+    winners.forEach((winner, index) => {
+      nextPlayerChips[winner.seat.id] =
+        (nextPlayerChips[winner.seat.id] ?? room.buyIn) + splitAmount + (index === 0 ? remainder : 0)
+    })
+    potWinners.push({ amount: pot.amount, winners: winners.map((entry) => entry.seat) })
   })
+
+  const names = (seats: PokerSeat[]) => seats.map((seat) => seat.name).join(' and ')
+  const describePot = ({ amount, winners }: { amount: number; winners: PokerSeat[] }, label: string) =>
+    winners.length === 1 ? `${winners[0].name} wins ${label} of $${amount}.` : `${names(winners)} split ${label} of $${amount}.`
+  // a pot only one player could win is just their own uncalled bet coming back
+  const contested = potWinners.filter((entry, index) => index === 0 || pots[index].eligibleIds.length > 1)
+  const winnerMessage =
+    contested.length === 1
+      ? describePot(contested[0], 'the pot')
+      : contested.map((entry, index) => describePot(entry, index === 0 ? 'the main pot' : `side pot ${index}`)).join(' ')
+  const allWinners = new Set(potWinners.flatMap((entry) => entry.winners.map((seat) => seat.id)))
+  const winners = scores.filter((entry) => allWinners.has(entry.seat.id))
 
   return {
     ...room,
@@ -522,10 +585,7 @@ const resolvePokerShowdown = (room: PokerRoomState): PokerRoomState => {
       lastActorId: winners.length === 1 ? winners[0].seat.id : null,
       lastActionType: 'showdown' as PokerActionType,
       lastContributions: [],
-      winnerMessage:
-        winners.length === 1
-          ? `${winners[0].seat.name} wins the pot of $${game.pot}.`
-          : `${winners.map((winner) => winner.seat.name).join(' and ')} split the pot of $${game.pot}.`,
+      winnerMessage,
       lastAction: 'Hand complete.',
     },
   }

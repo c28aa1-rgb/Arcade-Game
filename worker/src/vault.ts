@@ -17,6 +17,9 @@ import {
   calculateSlotsLinePayout,
   clampDiceTarget,
   countSlotsBonusSymbols,
+  BLACKJACK_MAX_HANDS,
+  BLACKJACK_RESHUFFLE_AT,
+  createBlackjackShoe,
   createMineIds,
   createShuffledDeck,
   createSlotsBonusGridFromSpin,
@@ -24,6 +27,7 @@ import {
   drawCards,
   drawRandomCard,
   finishDealerHand,
+  floorMultiplier,
   getDailyRewardState,
   getDateKeyDistance,
   getDiceMultiplier,
@@ -32,8 +36,8 @@ import {
   getHiLoOdds,
   getHiLoValue,
   getMinesMultiplier,
-  getPlinkoCenterBiasForWinStreak,
   getRoundResult,
+  isBlackjackNatural,
   isDateKey,
   isValidRouletteBet,
   MIN_BET,
@@ -48,6 +52,7 @@ import {
   rollTwentyDice,
   roundMoney,
   settleRouletteBets,
+  SLOT_BONUS_TRIGGER,
   SLOT_COLUMNS,
   SLOT_ROWS,
   spinRoulettePocket,
@@ -100,7 +105,13 @@ const fail = (message: string): never => {
 
 const HIDDEN_CARD: Card = { rank: '', suit: '' }
 
-const todayKeyUtc = () => new Date().toISOString().slice(0, 10)
+// The daily bonus runs on New York time, decided here and not by the
+// browser: accepting the browser's date (even within a day) let a player claim
+// "yesterday", "today" and "tomorrow" back to back.
+const todayKeyNewYork = () =>
+  new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).format(
+    new Date(),
+  )
 
 const LEADERBOARD_SYNC_MS = 10_000
 const RATE_WINDOW_MS = 10_000
@@ -322,12 +333,9 @@ export class PlayerVault extends DurableObject<Env> {
     return null
   }
 
-  async claimDaily(caller: Caller, todayKey: unknown) {
+  async claimDaily(caller: Caller) {
     return this.run(caller, (state) => {
-      if (!isDateKey(todayKey) || Math.abs(getDateKeyDistance(todayKey, todayKeyUtc())) > 1) {
-        fail("Your device's date looks off. Check it and try again.")
-      }
-      const key = todayKey as string
+      const key = todayKeyNewYork()
       if (state.lastDailyClaim && getDateKeyDistance(key, state.lastDailyClaim) < 1) {
         fail('Already collected today. Come back tomorrow.')
       }
@@ -348,7 +356,7 @@ export class PlayerVault extends DurableObject<Env> {
       const target = clampDiceTarget(Number(params.target))
       const multiplier = getDiceMultiplier(target, mode)
       if (multiplier <= 0) {
-        fail('That target can never win. Move it first.')
+        fail('That line cannot be bet. Keep the win chance between 0% and 98%.')
       }
       const values = rollTwentyDice()
       const total = getDiceTotal(values)
@@ -394,7 +402,7 @@ export class PlayerVault extends DurableObject<Env> {
       const orbCount = countSlotsBonusSymbols(grid)
       const { totalPayout, winningLines } = calculateSlotsLinePayout(grid, bet)
       state.balance += totalPayout - bet
-      if (orbCount >= 6) {
+      if (orbCount >= SLOT_BONUS_TRIGGER) {
         state.slots = { bet, basePayout: totalPayout, grid: createSlotsBonusGridFromSpin(grid), respins: 3 }
       }
       return {
@@ -437,7 +445,9 @@ export class PlayerVault extends DurableObject<Env> {
   async plinkoDrop(caller: Caller, params: { bet: unknown }) {
     return this.run(caller, (state) => {
       const bet = this.requireBet(state, params.bet)
-      const centerBias = getPlinkoCenterBiasForWinStreak(state.plinkoWinStreak)
+      // every drop is independent: no nudging toward the middle after a win
+      // streak (that cut the return to 58%; real Plinko never does it)
+      const centerBias = 0
       const seed = randomSeed()
       // the page replays this exact drop from the seed
       const slotIndex = simulateSlot(PLINKO_ROWS, PLINKO_MULTIPLIERS.length, centerBias, seededRandom(seed))
@@ -569,7 +579,7 @@ export class PlayerVault extends DurableObject<Env> {
       }
 
       const streak = round.streak + 1
-      const multiplier = Number((round.multiplier * stepMultiplier).toFixed(2))
+      const multiplier = floorMultiplier(round.multiplier * stepMultiplier)
       state.hilo = { ...round, deck: remainingDeck, current: nextCard, upcoming: nextUpcoming, streak, multiplier }
       return {
         guess,
@@ -707,6 +717,11 @@ export class PlayerVault extends DurableObject<Env> {
         fail('Finish your current hand first.')
       }
       const bet = this.requireBet(state, params.bet)
+      // a fresh 6-deck shoe once three-quarters has been dealt (this also
+      // replaces the single deck older saves were dealt from)
+      if (state.blackjackDeck.length < BLACKJACK_RESHUFFLE_AT) {
+        state.blackjackDeck = createBlackjackShoe()
+      }
       const { drawnCards, remainingDeck } = drawCards(state.blackjackDeck, 4)
       const [playerFirst, dealerFirst, playerSecond, dealerSecond] = drawnCards
       state.blackjackDeck = remainingDeck
@@ -717,6 +732,23 @@ export class PlayerVault extends DurableObject<Env> {
         completedHands: [false],
         activeHandIndex: 0,
         dealerHand: [dealerFirst, dealerSecond],
+      }
+      // the dealer checks for blackjack straight away, so a natural on either
+      // side ends the hand before you can double or split into it
+      if (isBlackjackNatural(state.blackjack.playerHands[0]) || isBlackjackNatural(state.blackjack.dealerHand)) {
+        const round = state.blackjack
+        const result = getRoundResult(round.playerHands, round.dealerHand, round.handBets)
+        state.balance += result.payout
+        state.blackjack = undefined
+        return {
+          playerHands: round.playerHands,
+          handBets: round.handBets,
+          completedHands: [true],
+          activeHandIndex: 0,
+          dealerHand: round.dealerHand,
+          resolved: true,
+          result,
+        }
       }
       return this.blackjackView(state.blackjack)
     })
@@ -760,6 +792,9 @@ export class PlayerVault extends DurableObject<Env> {
       }
 
       if (params.action === 'double') {
+        if (currentHand.length !== 2) {
+          fail('You can only double on your first two cards.')
+        }
         if (state.balance < currentHandBet) {
           fail('You need enough money to match your bet to double.')
         }
@@ -776,6 +811,9 @@ export class PlayerVault extends DurableObject<Env> {
         if (currentHand.length !== 2 || currentHand[0].rank !== currentHand[1].rank) {
           fail('You can only split a pair.')
         }
+        if (playerHands.length >= BLACKJACK_MAX_HANDS) {
+          fail(`You can split up to ${BLACKJACK_MAX_HANDS} hands.`)
+        }
         if (state.balance < currentHandBet) {
           fail('You need enough money to match your bet to split.')
         }
@@ -784,7 +822,12 @@ export class PlayerVault extends DurableObject<Env> {
         state.blackjackDeck = remainingDeck
         playerHands.splice(index, 1, [currentHand[0], drawnCards[0]], [currentHand[1], drawnCards[1]])
         handBets.splice(index, 1, currentHandBet, currentHandBet)
-        completedHands.splice(index, 1, false, false)
+        // split aces get one card each and stand
+        const splitAces = currentHand[0].rank === 'A'
+        completedHands.splice(index, 1, splitAces, splitAces)
+        if (splitAces) {
+          return advance()
+        }
         state.blackjack = { ...round, playerHands, handBets, completedHands, activeHandIndex: index }
         return this.blackjackView(state.blackjack)
       }

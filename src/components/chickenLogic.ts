@@ -23,7 +23,7 @@ export interface ChickenDifficultyConfig {
   id: ChickenDifficulty
   label: string
   blurb: string
-  // Advertised per-lane collision chance (used only for the info panel).
+  // Per-lane collision chance, worked out from the odds (info panel only).
   hitLabel: string
   start: number
   max: number
@@ -69,19 +69,24 @@ function buildConfig(
   id: ChickenDifficulty,
   label: string,
   blurb: string,
-  hitLabel: string,
   start: number,
   max: number,
 ): ChickenDifficultyConfig {
   const multipliers = buildMultipliers(start, max)
-  return { id, label, blurb, hitLabel, start, max, multipliers, survival: buildSurvival(multipliers) }
+  const survival = buildSurvival(multipliers)
+  // the real chance of getting hit on a lane after the first, read straight
+  // from the odds so the label can never drift from the math
+  const laterLanes = survival.slice(1)
+  const hitChance = 1 - laterLanes.reduce((sum, chance) => sum + chance, 0) / laterLanes.length
+  const hitLabel = `~${Math.round(hitChance * 100)}% / lane`
+  return { id, label, blurb, hitLabel, start, max, multipliers, survival }
 }
 
 export const CHICKEN_DIFFICULTIES: Record<ChickenDifficulty, ChickenDifficultyConfig> = {
-  easy: buildConfig('easy', 'Easy', 'Gentle traffic, steady climb.', '~4% / lane', 1.02, 24),
-  medium: buildConfig('medium', 'Medium', 'Busier road, bigger jumps.', '~12% / lane', 1.09, 2208),
-  hard: buildConfig('hard', 'Hard', 'Heavy traffic, brutal payouts.', '~20% / lane', 1.2, 51004.8),
-  daredevil: buildConfig('daredevil', 'Daredevil', 'One nudge from a fortune.', '~40% / lane', 1.6, 3138009.6),
+  easy: buildConfig('easy', 'Easy', 'Gentle traffic, steady climb.', 1.02, 24),
+  medium: buildConfig('medium', 'Medium', 'Busier road, bigger jumps.', 1.09, 2208),
+  hard: buildConfig('hard', 'Hard', 'Heavy traffic, brutal payouts.', 1.2, 51004.8),
+  daredevil: buildConfig('daredevil', 'Daredevil', 'One nudge from a fortune.', 1.6, 3138009.6),
 }
 
 export const CHICKEN_DIFFICULTY_ORDER: ChickenDifficulty[] = ['easy', 'medium', 'hard', 'daredevil']
